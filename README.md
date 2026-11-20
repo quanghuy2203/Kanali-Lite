@@ -1,9 +1,8 @@
-# Kanali (Rust)
+# Kanali Lite
 
 Ứng dụng điều khiển màn hình **Tryx Panorama** (USB `391A:1061`), viết bằng Rust, ưu tiên nhẹ RAM.
 
 - `kanali.exe`: icon khay hệ thống + giao diện. Tiến trình nền không có cửa sổ, giao diện là tiến trình riêng, đóng cửa sổ là giải phóng RAM.
-- `kanali-rs.exe`: công cụ dòng lệnh (`devices`, `hello`, `info`, `files`, `play`, ...).
 
 ## Tính năng
 - Giữ màn hình sáng (heartbeat), tự kết nối lại khi rút/cắm cáp hoặc máy ngủ dậy
@@ -16,9 +15,9 @@
 Cần Rust (MSVC) trên Windows.
 
 ```
-cargo build --release
+cargo build --locked --release --bin kanali
 ```
-File nằm ở `target\release\kanali.exe` và `target\release\kanali-rs.exe`.
+File nằm ở `target\release\kanali.exe`.
 Hãy đặt `kanali.exe` trong thư mục bạn có quyền ghi (ví dụ `%LOCALAPPDATA%\Kanali`) để tự cập nhật thay được file.
 
 ## Phát hành và tự cập nhật

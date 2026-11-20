@@ -8,11 +8,11 @@ use kanali_rs::{
     update,
 };
 
-const BG: Color32 = Color32::from_rgb(12, 15, 22);
-const CARD: Color32 = Color32::from_rgb(21, 26, 37);
-const BORDER: Color32 = Color32::from_rgb(38, 46, 64);
-const ACCENT: Color32 = Color32::from_rgb(34, 211, 238);
-const DIM: Color32 = Color32::from_rgb(138, 148, 170);
+const BG: Color32 = Color32::from_rgb(16, 17, 16);
+const CARD: Color32 = Color32::from_rgb(30, 31, 29);
+const BORDER: Color32 = Color32::from_rgb(58, 60, 55);
+const ACCENT: Color32 = Color32::from_rgb(205, 246, 55);
+const DIM: Color32 = Color32::from_rgb(172, 176, 165);
 const GOOD: Color32 = Color32::from_rgb(52, 211, 153);
 const WARN: Color32 = Color32::from_rgb(251, 191, 36);
 const BAD: Color32 = Color32::from_rgb(248, 113, 113);
@@ -23,13 +23,13 @@ pub fn run() {
     };
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_title("Kanali")
-            .with_inner_size([500.0, 740.0])
-            .with_min_inner_size([440.0, 520.0]),
+            .with_title("Kanali Lite")
+            .with_inner_size([940.0, 620.0])
+            .with_min_inner_size([700.0, 420.0]),
         ..Default::default()
     };
     let _ = eframe::run_native(
-        "Kanali",
+        "Kanali Lite",
         options,
         Box::new(|cc| {
             setup(&cc.egui_ctx);
@@ -54,9 +54,9 @@ fn setup(ctx: &egui::Context) {
     v.window_fill = CARD;
     v.extreme_bg_color = Color32::from_rgb(9, 11, 17);
     v.widgets.noninteractive.bg_stroke = Stroke::new(1.0_f32, BORDER);
-    v.widgets.inactive.bg_fill = Color32::from_rgb(30, 37, 52);
-    v.widgets.inactive.weak_bg_fill = Color32::from_rgb(30, 37, 52);
-    v.widgets.hovered.weak_bg_fill = Color32::from_rgb(40, 49, 68);
+    v.widgets.inactive.bg_fill = Color32::from_rgb(47, 49, 43);
+    v.widgets.inactive.weak_bg_fill = Color32::from_rgb(47, 49, 43);
+    v.widgets.hovered.weak_bg_fill = Color32::from_rgb(68, 72, 60);
     for w in [&mut v.widgets.inactive, &mut v.widgets.hovered, &mut v.widgets.active] {
         w.rounding = Rounding::same(8.0);
     }
@@ -173,7 +173,22 @@ fn combo(ui: &mut egui::Ui, label: &str, cur: &mut String, files: &[String], ext
 
 // ---------- ứng dụng ----------
 
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum Page { Home, Panorama, Settings }
+
+impl Page {
+    fn title(self) -> &'static str {
+        match self {
+            Self::Home => "Trang chủ",
+            Self::Panorama => "PANORAMA",
+            Self::Settings => "Cài đặt",
+        }
+    }
+}
+
 struct App {
+    page: Page,
+    display_tab: bool,
     cfg: Config,
     state: State,
     last_read: Instant,
@@ -185,7 +200,7 @@ impl App {
     fn new() -> Self {
         let cfg: Config = config::load_opt(&config::config_path()).unwrap_or_default();
         let state: State = config::load_opt(&config::state_path()).unwrap_or_default();
-        Self { cfg, state, last_read: Instant::now(), autostart: autostart::is_enabled(), notice: String::new() }
+        Self { page: Page::Home, display_tab: false, cfg, state, last_read: Instant::now(), autostart: autostart::is_enabled(), notice: String::new() }
     }
 
     fn save(&self) {
@@ -200,8 +215,7 @@ impl App {
         let alive = self.alive();
         ui.horizontal(|ui| {
             ui.vertical(|ui| {
-                ui.label(RichText::new("Kanali").size(26.0).strong().color(Color32::WHITE));
-                ui.label(RichText::new("Điều khiển màn hình Tryx Panorama").color(DIM));
+                ui.label(RichText::new(self.page.title()).size(26.0).strong().color(Color32::WHITE));
             });
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let (color, text) = if !alive {
@@ -242,7 +256,6 @@ impl App {
             title(ui, "Video đang phát");
             if self.state.files.is_empty() {
                 ui.label(RichText::new("Chưa có danh sách video (chưa kết nối màn hình).").color(DIM));
-                return;
             }
             let mut chosen: Option<String> = None;
             egui::ScrollArea::vertical().max_height(250.0).show(ui, |ui| {
@@ -253,17 +266,24 @@ impl App {
                         continue;
                     }
                     ui.label(RichText::new(group).small().color(DIM));
-                    for p in items {
-                        let file = file_of(p);
-                        let selected = self.cfg.playing == file;
-                        let resp = ui.add_sized(
-                            [ui.available_width(), 28.0],
-                            egui::SelectableLabel::new(selected, label_of(file)),
-                        );
-                        if resp.clicked() {
-                            chosen = Some(file.to_owned());
+                    ui.horizontal_wrapped(|ui| {
+                        let gap = ui.spacing().item_spacing.x;
+                        let width = ui.available_width();
+                        let columns = ((width + gap) / (170.0 + gap)).floor().max(1.0);
+                        let tile = ((width + gap) / columns - gap).floor();
+                        for path in items {
+                            let file = file_of(path);
+                            let active = self.cfg.playing == file;
+                            let color = if active { ACCENT } else { BORDER };
+                            let label = label_of(file);
+                            let button = egui::Button::new(short(&label, 22))
+                                .fill(if active { Color32::from_rgb(52, 61, 34) } else { BG })
+                                .stroke(Stroke::new(1.0_f32, color));
+                            if ui.add_sized([tile, 52.0], button).on_hover_text(file).clicked() {
+                                chosen = Some(file.to_owned());
+                            }
                         }
-                    }
+                    });
                     ui.add_space(6.0);
                 }
             });
@@ -383,23 +403,61 @@ impl eframe::App for App {
             self.last_read = Instant::now();
         }
 
+        egui::SidePanel::left("navigation")
+            .resizable(false)
+            .exact_width(156.0)
+            .frame(egui::Frame::none().fill(ACCENT).inner_margin(14.0))
+            .show(ctx, |ui| {
+                ui.add_space(10.0);
+                ui.label(RichText::new("KANALI").size(29.0).strong().color(BG));
+                ui.label(RichText::new("LITE").strong().color(BG));
+                ui.add_space(30.0);
+                for page in [Page::Home, Page::Panorama, Page::Settings] {
+                    let active = self.page == page;
+                    let label = RichText::new(page.title()).strong()
+                        .color(if active { ACCENT } else { BG });
+                    if ui.add_sized([ui.available_width(), 36.0],
+                        egui::Button::new(label).fill(if active { BG } else { ACCENT })
+                            .stroke(Stroke::NONE).rounding(4.0)).clicked() {
+                        self.page = page;
+                    }
+                }
+            });
+
         egui::CentralPanel::default()
             .frame(egui::Frame::none().fill(BG).inner_margin(Margin::same(16.0)))
             .show(ctx, |ui| {
-                egui::ScrollArea::vertical().show(ui, |ui| {
-                    self.header(ui);
+                self.header(ui);
+                egui::ScrollArea::vertical().id_salt(self.page).show(ui, |ui| {
                     self.status_card(ui);
-                    self.video_card(ui);
-                    self.display_card(ui);
-                    self.device_card(ui);
-                    self.settings_card(ui);
-                    self.update_card(ui);
-                    ui.add_space(8.0);
-                    ui.label(
-                        RichText::new("Đóng cửa sổ này không tắt màn hình. Dùng icon khay hệ thống để thoát hẳn.")
-                            .small()
-                            .color(DIM),
-                    );
+                    match self.page {
+                        Page::Home => {
+                            card(ui, |ui| {
+                                ui.label(RichText::new("TRYX").color(ACCENT).strong());
+                                ui.label(RichText::new("PANORAMA").size(34.0).strong());
+                                if self.alive() && self.state.connected {
+                                    info_row(ui, "Video đã chọn", &label_of(&self.cfg.playing));
+                                }
+                                if primary_button(ui, "Điều khiển màn hình").clicked() {
+                                    self.page = Page::Panorama;
+                                }
+                            });
+                            self.device_card(ui);
+                        }
+                        Page::Panorama => {
+                            ui.horizontal(|ui| {
+                                ui.selectable_value(&mut self.display_tab, false, "Thư viện video");
+                                ui.selectable_value(&mut self.display_tab, true, "Hiển thị");
+                            });
+                            if self.display_tab { self.display_card(ui); }
+                            else { self.video_card(ui); }
+                        }
+                        Page::Settings => {
+                            self.settings_card(ui);
+                            self.update_card(ui);
+                            ui.label(RichText::new("Đóng cửa sổ vẫn giữ màn hình hoạt động. Để thoát hẳn, dùng biểu tượng ở khay hệ thống.").small().color(DIM));
+                        }
+                    }
                 });
             });
 

@@ -27,13 +27,15 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Build
-        run: cargo build --release
+        run: |
+          cargo test --locked --lib
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo build --locked --release --bin kanali
 
       - name: Đóng gói và băm SHA-256
         shell: pwsh
         run: |
           Copy-Item target/release/kanali.exe kanali-windows-x64.exe
-          Copy-Item target/release/kanali-rs.exe kanali-rs-cli-windows-x64.exe
           $h = (Get-FileHash kanali-windows-x64.exe -Algorithm SHA256).Hash.ToLower()
           "$h  kanali-windows-x64.exe" | Out-File -Encoding ascii kanali-windows-x64.exe.sha256
 
@@ -43,5 +45,4 @@ jobs:
           files: |
             kanali-windows-x64.exe
             kanali-windows-x64.exe.sha256
-            kanali-rs-cli-windows-x64.exe
           generate_release_notes: true
