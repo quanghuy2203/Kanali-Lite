@@ -95,12 +95,13 @@ fn session(sh: &Arc<Shared>) -> Result<(), String> {
             c
         }
     };
-    device::apply_play(&mut f, &cfg)?;
+    let initial = device::apply_play(&mut f, &cfg);
     sh.with(|s| {
         s.connected = true;
         s.message = "Đã kết nối".into();
         s.info = Some(info);
         s.files = files;
+        if let Err(e) = initial { s.media_status = e; }
     });
 
     let request_path=config::data_dir().join("remove-request.json");
@@ -142,18 +143,21 @@ fn session(sh: &Arc<Shared>) -> Result<(), String> {
             }
             device::apply_play(&mut f,&cfg)?;
         }
-        if sh.refresh.swap(false, Ordering::Relaxed) {
+        let refresh = sh.refresh.swap(false, Ordering::Relaxed);
+        if refresh {
             let files = device::fetch_files(&mut f)?;
-            device::apply_play(&mut f,&cfg)?;
             sh.with(|s| s.files = files);
         }
         if let Some(new) = config::load_opt::<Config>(&config::config_path()) {
-            if new.playing != cfg.playing
+            if refresh || new.playing != cfg.playing
                 || new.poweron != cfg.poweron
                 || new.standby != cfg.standby
                 || new.level != cfg.level || new.layout != cfg.layout
             {
-                device::apply_play(&mut f, &new)?;
+                match device::apply_play(&mut f, &new) {
+                    Ok(()) => sh.with(|s| s.message = format!("PANORAMA đã xác nhận {}", new.playing)),
+                    Err(e) => sh.with(|s| s.message = e),
+                }
             }
             cfg = new;
         }

@@ -321,12 +321,34 @@ impl App {
                         self.cfg.playing = self.carousel.clone();
                     }
                     match config::save(&config::config_path(), &self.cfg) {
-                        Ok(()) => self.media_note = "Đã lưu cấu hình.".into(),
+                        Ok(()) => { config::send_command("refresh"); self.media_note.clear(); },
                         Err(e) => self.media_note = e.to_string(),
                     }
                 }
             });
+            if ui.button("Khôi phục màn hình").on_hover_text("Phát Cooling delivery toàn màn hình và bật đèn nền").clicked() {
+                let mut recovered = self.cfg.clone();
+                recovered.restore_screen();
+                match config::save(&config::config_path(), &recovered) {
+                    Ok(()) => {
+                        self.full = recovered.playing.clone();
+                        self.carousel = recovered.playing.clone();
+                        self.draft = recovered.layout.clone();
+                        self.cfg = recovered;
+                        config::send_command("refresh");
+                        self.media_note.clear();
+                    }
+                    Err(e) => self.media_note = e.to_string(),
+                }
+            }
         });
+        ui.label(&self.state.message);
+        if !self.media_note.is_empty() {
+            ui.label(&self.media_note);
+        }
+        if !self.state.media_status.is_empty() {
+            ui.label(&self.state.media_status);
+        }
         ui.separator();
     }
 
@@ -497,7 +519,7 @@ impl App {
                                 visible.push(file.clone());
                                 if let Some(path) = self.state.files.iter().find(|p| {
                                     p.rsplit_once('/').is_some_and(|(dir, n)| {
-                                        dir.ends_with("/media") && n == file
+                                        (dir.ends_with("/media") || n == config::DOWNLOAD_46) && n == file
                                     })
                                 }) {
                                     let delete_box = Rect::from_min_size(
@@ -619,12 +641,6 @@ impl App {
             }
             ui.separator();
             ui.collapsing("Thông số hiển thị", |ui| self.metrics(ui));
-        }
-        if !self.media_note.is_empty() {
-            ui.label(&self.media_note);
-        }
-        if !self.state.media_status.is_empty() {
-            ui.label(&self.state.media_status);
         }
         ui.collapsing("Cài đặt màn hình", |ui| {
             self.display_card(ui);

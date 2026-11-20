@@ -9,6 +9,8 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
+pub const FACTORY_VIDEO: &str = "default_01.mp4.h264_2240x1080";
+pub const DOWNLOAD_46: &str = "download_46.mp4.h264_2240x1080";
 pub const DEFAULT_POWERON: &str = "default_poweron.mp4.h264_2240x1080";
 pub const DEFAULT_STANDBY: &str = "default_standby.mp4.h264_2240x1080";
 
@@ -63,7 +65,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             layout: Layout::default(),
-            playing: "download_46.mp4.h264_2240x1080".into(),
+            playing: FACTORY_VIDEO.into(),
             poweron: DEFAULT_POWERON.into(),
             standby: DEFAULT_STANDBY.into(),
             level: 67,
@@ -71,6 +73,16 @@ impl Default for Config {
             check_updates: true,
             repo: String::new(),
         }
+    }
+}
+
+impl Config {
+    pub fn restore_screen(&mut self) {
+        self.playing = FACTORY_VIDEO.into();
+        self.layout = Layout::default();
+        self.level = self.level.clamp(67, 100);
+        self.poweron = DEFAULT_POWERON.into();
+        self.standby = DEFAULT_STANDBY.into();
     }
 }
 
@@ -116,9 +128,9 @@ pub fn load_opt<T: DeserializeOwned>(path: &Path) -> Option<T> {
 }
 
 pub fn save<T: Serialize>(path: &Path, v: &T) -> io::Result<()> {
-    let tmp = path.with_extension("tmp");
-    fs::write(&tmp, serde_json::to_vec_pretty(v).map_err(io::Error::other)?)?;
-    fs::rename(&tmp, path)
+    let mut tmp = tempfile::NamedTempFile::new_in(path.parent().unwrap_or(Path::new(".")))?;
+    serde_json::to_writer_pretty(tmp.as_file_mut(), v).map_err(io::Error::other)?;
+    tmp.persist(path).map(|_| ()).map_err(|e| e.error)
 }
 
 #[derive(Serialize, Deserialize)]

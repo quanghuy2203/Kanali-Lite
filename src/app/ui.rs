@@ -413,6 +413,17 @@ impl eframe::App for App {
                 if s.update.restart && s.version == env!("CARGO_PKG_VERSION") && config::now_ms().saturating_sub(s.updated_ms) < 7000 {
                     ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                 }
+                if s.files != self.state.files && !s.files.is_empty() {
+                    if let Some(cfg) = config::load_opt::<Config>(&config::config_path()) {
+                        let missing = |name: &str| !s.files.iter().any(|p| p.rsplit('/').next() == Some(name));
+                        if missing(&self.full) { self.full = cfg.playing.clone(); }
+                        if missing(&self.carousel) { self.carousel = cfg.playing.clone(); }
+                        if self.draft.split && (missing(&self.draft.left) || missing(&self.draft.right)) {
+                            self.draft = cfg.layout.clone();
+                        }
+                        self.cfg = cfg;
+                    }
+                }
                 self.state = s;
             }
             if self.page==Page::Panorama {

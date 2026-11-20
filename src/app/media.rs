@@ -167,6 +167,46 @@ fn start_engine() -> Result<PathBuf, String> {
     Err("Đã yêu cầu Steam mở Wallpaper Engine. Kiểm tra trạng thái khởi động trong Steam rồi kết nối lại.".into())
 }
 
+const ENCODE: &[&str]=&["-an","-pix_fmt","yuv420p","-c:v","libx264","-threads","2","-preset","veryfast","-crf","23","-f","h264"];
+const SCALE: &str="fps=24,scale=2240:1080:force_original_aspect_ratio=decrease,pad=2240:1080:(ow-iw)/2:(oh-ih)/2,setsar=1";
+
+fn contains_picture(samples:&[u8])->bool {
+    samples.chunks_exact(64*32).any(|frame|frame.iter().filter(|&&v|v>12).take(5).count()>=5)
+}
+
+fn capture_scene(w:&Wallpaper,target:&Path)->Result<(),String>{
+    let mut errors=Vec::new();
+    for gpu in [true,false] {
+        let mut cmd=ffmpeg();
+        if gpu {
+            // Match only our pop-out window, including when another app covers it.
+            cmd.args(["-filter_complex",&format!("gfxcapture=window_title=^{}$:capture_cursor=0:max_framerate=24,hwdownload,format=bgra,{SCALE}[video]",w.window),"-map","[video]"]);
+        }else{
+            cmd.args(["-f","gdigrab","-framerate","24","-draw_mouse","0","-i",&format!("title={}",w.window),"-vf",SCALE]);
+        }
+        // Wall-clock limit also covers capture sources that stop delivering frames.
+        let log=tempfile::tempfile().map_err(|e|e.to_string())?;
+        let mut child=cmd.args(["-t","15"]).args(ENCODE).arg(target)
+            .stderr(log.try_clone().map_err(|e|e.to_string())?).spawn().map_err(|e|format!("Không mở được FFmpeg: {e}"))?;
+        let start=std::time::Instant::now();
+        let success=loop {
+            if let Some(status)=child.try_wait().map_err(|e|e.to_string())? {break status.success();}
+            if start.elapsed()>Duration::from_secs(60){let _=child.kill();let _=child.wait();break false;}
+            thread::sleep(Duration::from_millis(150));
+        };
+        if success {
+            let out=ffmpeg().arg("-i").arg(target).args(["-vf","fps=2,scale=64:32,format=gray","-frames:v","30","-f","rawvideo","-"]).output().map_err(|e|e.to_string())?;
+            if out.status.success() && contains_picture(&out.stdout){return Ok(());}
+            errors.push("chỉ thu được khung đen".into());
+        }else{
+            use std::io::{Read,Seek};
+            let mut log=log;let _=log.rewind();let mut detail=String::new();let _=log.take(450).read_to_string(&mut detail);
+            errors.push(detail);
+        }
+    }
+    Err(format!("Không thu được hình của Wallpaper Engine. Giữ cửa sổ wallpaper mở và dùng FFmpeg có bộ lọc gfxcapture. Đã hủy nhập. {}",errors.join(" / ")))
+}
+
 pub fn import(source: PathBuf, project: bool) -> Result<String, String> {
     let mut input = source.clone();
     let mut capture = None;
@@ -232,23 +272,11 @@ pub fn import(source: PathBuf, project: bool) -> Result<String, String> {
     let temp = tempfile::NamedTempFile::new_in(&queue)
         .map_err(|e| e.to_string())?
         .into_temp_path();
-    let mut cmd = ffmpeg();
-    if let Some(w) = &capture {
-        cmd.args([
-            "-f",
-            "gdigrab",
-            "-framerate",
-            "24",
-            "-draw_mouse",
-            "0",
-            "-i",
-        ])
-        .arg(format!("title={}", w.window))
-        .args(["-t", "15"]);
-    } else {
-        cmd.arg("-i").arg(&input);
+    if let Some(w)=&capture {
+        capture_scene(w,&temp)?;
+    }else{
+        run(ffmpeg().arg("-i").arg(&input).args(["-vf",SCALE]).args(ENCODE).arg(&*temp))?;
     }
-    run(cmd.args(["-an","-vf","fps=24,scale=2240:1080:force_original_aspect_ratio=decrease,pad=2240:1080:(ow-iw)/2:(oh-ih)/2,setsar=1","-pix_fmt","yuv420p","-c:v","libx264","-threads","2","-preset","veryfast","-crf","23","-f","h264"]).arg(&*temp))?;
     drop(capture);
     if !(1..=500_000_000).contains(&fs::metadata(&temp).map_err(|e| e.to_string())?.len()) {
         return Err("Video sau chuyển đổi phải dưới 500 MB".into());
@@ -356,4 +384,16 @@ pub fn active_wallpaper(monitor: u32) -> Result<ActiveWallpaper, String> {
         source: path,
         project: false,
     })
+}
+
+#[cfg(test)]
+mod capture_tests {
+    use super::*;
+    #[test]
+    fn rejects_black_but_accepts_dark_scene_after_fade() {
+        let mut samples=vec![0;64*32*3];
+        assert!(!contains_picture(&samples));
+        samples[4100..4120].fill(24);
+        assert!(contains_picture(&samples));
+    }
 }

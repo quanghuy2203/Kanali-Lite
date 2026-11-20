@@ -145,16 +145,32 @@ pub fn parse_info(replies: &[Vec<u8>]) -> DeviceInfo {
 }
 
 pub fn fetch_files(f: &mut File) -> Result<Vec<String>, String> {
-    send(f, &proto::msg_list_files())?;
-    let r = read_frame(f)?;
-    let paths = proto::find_paths(&r);
-    send(f, &proto::msg_commit())?;
-    Ok(paths)
+    let catalog = tracked_reply(f, 103, &proto::f_str(1, "N/A"), 503)?;
+    Ok(proto::find_paths(&catalog))
 }
 
 pub fn apply_play(f: &mut File, cfg: &Config) -> Result<(), String> {
-    send(f, &proto::configured_play(&cfg.poweron, &cfg.standby, &cfg.playing, cfg.level,&cfg.layout))?;
-    send(f, &proto::overlay(&cfg.layout))
+    let request = proto::configured_play(&cfg.poweron, &cfg.standby, &cfg.playing, cfg.level, &cfg.layout);
+    let fields = proto::parse(&request).ok_or("Cấu hình phát không hợp lệ")?;
+    tracked_reply(f, 200, proto::find_bytes(&fields, 200).ok_or("Thiếu cấu hình phát")?, 600)?;
+    send(f, &proto::overlay(&cfg.layout))?;
+    let readback = tracked_reply(f, 104, &[], 504)?;
+    if !matches_playback(&readback, cfg) {
+        return Err("PANORAMA chưa xác nhận video đã chọn. Hãy dùng Khôi phục màn hình.".into());
+    }
+    Ok(())
+}
+
+fn matches_playback(body: &[u8], cfg: &Config) -> bool {
+    let Some(work) = proto::parse(body).and_then(|fields| proto::find_bytes(&fields, 3))
+        .and_then(proto::parse) else { return false; };
+    let matches = |field, name: &str| proto::find_str(&work, field).rsplit('/').next() == Some(name);
+    let split = proto::find_int(&work, 1).unwrap_or(0);
+    if cfg.layout.split {
+        split == 1 && matches(4, &cfg.layout.left) && matches(5, &cfg.layout.right)
+    } else {
+        split == 0 && matches(3, &cfg.playing)
+    }
 }
 
 pub fn heartbeat(f: &mut File) -> Result<(), String> {
@@ -203,7 +219,8 @@ fn tracked_reply(f:&mut File, field:u32, body:&[u8], expected:u32)->Result<Vec<u
     use std::sync::atomic::{AtomicU64,Ordering};
     static NEXT:AtomicU64=AtomicU64::new(1);
     let id=NEXT.fetch_add(1,Ordering::Relaxed);
-    send(f,&[proto::f_bytes(1,&proto::f_varint(2,id)),proto::f_bytes(field,body)].concat())?;
+    let header = [proto::f_varint(1, 1), proto::f_varint(2, id)].concat();
+    send(f, &[proto::f_bytes(1, &header), proto::f_bytes(field, body)].concat())?;
     for _ in 0..16 {
         let raw=read_frame(f)?;
         let fields=proto::parse(&raw).ok_or("Phản hồi USB không hợp lệ")?;
@@ -216,11 +233,11 @@ fn tracked_reply(f:&mut File, field:u32, body:&[u8], expected:u32)->Result<Vec<u
     Err("Thiếu xác nhận từ PANORAMA".into())
 }
 
-fn removable(catalog:&[u8],path:&str)->bool{
-    let Some((dir,name))=path.rsplit_once('/') else{return false};
-    if !dir.ends_with("/media") || name.is_empty(){return false;}
-    let Some(fields)=proto::parse(catalog) else{return false};
-    let mut allowed=false;
+fn removal_type(catalog:&[u8],path:&str)->Option<&'static str>{
+    let (dir,name)=path.rsplit_once('/')?;
+    if name.is_empty(){return None;}
+    let fields=proto::parse(catalog)?;
+    let mut allowed=None;
     let mut count=0;
     for (kind,val) in fields{
         if let proto::Val::Bytes(bytes)=val{
@@ -228,22 +245,42 @@ fn removable(catalog:&[u8],path:&str)->bool{
                 let file=proto::find_str(&entry,1);
                 if file.rsplit('/').next()==Some(name){
                     count+=1;
-                    allowed=kind==1 && file==path && proto::find_int(&entry,4).unwrap_or(0)==0;
+                    let user_media = kind == 1 && dir.ends_with("/media");
+                    let downloaded = kind == 2 && name == crate::config::DOWNLOAD_46;
+                    if file == path && proto::find_int(&entry, 4).unwrap_or(0) == 0 {
+                        if user_media { allowed = Some("media"); }
+                        if downloaded { allowed = Some("preset"); }
+                    }
                 }
             }
         }
     }
-    allowed && count==1
+    allowed.filter(|_| count == 1)
 }
 
 pub fn remove_media(f:&mut File,path:&str,cfg:&Config)->Result<Vec<String>,String>{
     let catalog=tracked_reply(f,103,&proto::f_str(1,"N/A"),503)?;
-    if !removable(&catalog,path){return Err("Chỉ xóa được media người dùng trong thư viện hiện tại.".into());}
+    let file_type = removal_type(&catalog,path).ok_or("Tệp chỉ đọc, trùng tên hoặc không phải media có thể xóa.")?;
     let name=path.rsplit('/').next().unwrap_or("");
-    if [cfg.playing.as_str(),&cfg.poweron,&cfg.standby].contains(&name) || (cfg.layout.split && [cfg.layout.left.as_str(),&cfg.layout.right].contains(&name)){
-        return Err("Video đang được sử dụng. Chọn video khác và lưu trước khi xóa.".into());
+    let mut next = cfg.clone();
+    if next.playing == name || (next.layout.split && [&next.layout.left, &next.layout.right].iter().any(|s| s.as_str() == name)) {
+        next.playing = crate::config::FACTORY_VIDEO.into();
+        next.layout = Default::default();
+        next.level = next.level.clamp(67, 100);
     }
-    tracked_reply(f,403,&[proto::f_str(1,name),proto::f_str(2,"media")].concat(),600)?;
+    if next.poweron == name { next.poweron = crate::config::DEFAULT_POWERON.into(); }
+    if next.standby == name { next.standby = crate::config::DEFAULT_STANDBY.into(); }
+    if next.layout.left == name { next.layout.left.clear(); }
+    if next.layout.right == name { next.layout.right.clear(); }
+    if next != *cfg && !proto::find_paths(&catalog).iter().any(|p| p.rsplit('/').next() == Some(next.playing.as_str())) {
+        return Err("Thiếu video thay thế trong thư viện PANORAMA.".into());
+    }
+    // The draft on disk may differ from what the device is actually playing.
+    apply_play(f, &next)?;
+    if next != *cfg {
+        crate::config::save(&crate::config::config_path(), &next).map_err(|e| e.to_string())?;
+    }
+    tracked_reply(f,403,&[proto::f_str(1,name),proto::f_str(2,file_type)].concat(),600)?;
     let catalog=tracked_reply(f,103,&proto::f_str(1,"N/A"),503)?;
     if proto::parse(&catalog).is_none(){return Err("Chưa xác minh được thư viện sau khi xóa".into());}
     let files=proto::find_paths(&catalog);
@@ -258,9 +295,37 @@ mod removal_tests{
     fn only_unique_writable_user_media_can_be_removed(){
         let path="/mnt/data/media/clip.mp4";
         let entry=|kind,readonly|proto::f_bytes(kind,&[proto::f_str(1,path),proto::f_varint(4,readonly)].concat());
-        assert!(removable(&entry(1,0),path));
-        assert!(!removable(&entry(1,1),path));
-        assert!(!removable(&entry(2,0),path));
-        assert!(!removable(&[entry(1,0),entry(2,0)].concat(),path));
+        assert_eq!(removal_type(&entry(1,0),path), Some("media"));
+        assert_eq!(removal_type(&entry(1,1),path), None);
+        assert_eq!(removal_type(&entry(2,0),path), None);
+        assert_eq!(removal_type(&[entry(1,0),entry(2,0)].concat(),path), None);
     }
+    #[test]
+    fn downloaded_preset_is_removable_only_if_writable() {
+        for (name, readonly, expected) in [
+            (crate::config::DOWNLOAD_46, 0, Some("preset")),
+            (crate::config::DOWNLOAD_46, 1, None),
+            (crate::config::FACTORY_VIDEO, 0, None),
+        ] {
+            let path = format!("/mnt/data/preset/{name}");
+            let entry = proto::f_bytes(2, &[proto::f_str(1, &path), proto::f_varint(4, readonly)].concat());
+            assert_eq!(removal_type(&entry, &path), expected);
+        }
+    }
+
+    #[test]
+    fn recovery_requires_readback_of_the_factory_video() {
+        let mut cfg = Config::default();
+        cfg.playing = "black.mp4".into();
+        cfg.layout.split = true;
+        cfg.layout.enabled = false;
+        cfg.level = 0;
+        cfg.restore_screen();
+        assert!(cfg.layout.enabled && cfg.level > 0);
+        let body = |name| proto::f_bytes(3, &proto::f_str(3, name));
+        assert!(matches_playback(&body(crate::config::FACTORY_VIDEO), &cfg));
+        assert!(!matches_playback(&body("black.mp4"), &cfg));
+        assert!(!matches_playback(&[], &cfg));
+    }
+
 }
