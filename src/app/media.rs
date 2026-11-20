@@ -30,6 +30,13 @@ fn ffmpeg() -> Command {
     let mut cmd = Command::new(
         local
             .filter(|p| p.is_file())
+            .or_else(|| {
+                ["ProgramFiles", "ProgramFiles(x86)"]
+                    .into_iter()
+                    .filter_map(std::env::var_os)
+                    .map(|p| PathBuf::from(p).join("KANALI/resources/Connect/ffmpeg/ffmpeg.exe"))
+                    .find(|p| p.is_file())
+            })
             .unwrap_or_else(|| "ffmpeg.exe".into()),
     );
     cmd.creation_flags(0x08000000)
@@ -81,9 +88,14 @@ impl Drop for Wallpaper {
 }
 
 fn engine() -> Result<PathBuf, String> {
-    super::workshop::libraries()?.into_iter()
-        .map(|lib| lib.join("common/wallpaper_engine/wallpaper64.exe"))
-        .find(|p| p.is_file()).ok_or("Chưa tìm thấy Wallpaper Engine trong các thư viện Steam".into())
+    super::workshop::libraries()?
+        .into_iter()
+        .flat_map(|lib| {
+            ["wallpaper64.exe", "wallpaper32.exe"]
+                .map(|exe| lib.join("common/wallpaper_engine").join(exe))
+        })
+        .find(|p| p.is_file())
+        .ok_or("Chưa tìm thấy Wallpaper Engine trong các thư viện Steam".into())
 }
 
 pub fn import(source: PathBuf, project: bool) -> Result<String, String> {
@@ -190,4 +202,87 @@ pub fn pending() -> Option<PathBuf> {
         .flatten()
         .map(|e| e.path())
         .find(|p| p.extension() == Some(OsStr::new("h264_2240x1080")))
+}
+
+/// Query the running Wallpaper Engine instance through its documented control interface.
+pub struct ActiveWallpaper {
+    pub source: PathBuf,
+    pub project: bool,
+    pub title: String,
+}
+
+pub fn active_wallpaper(monitor: u32) -> Result<ActiveWallpaper, String> {
+    use std::process::Stdio;
+    let mut child = Command::new(engine()?)
+        .args(["-control", "getWallpaper", "-monitor", &monitor.to_string()])
+        .creation_flags(0x08000000)
+        .stdout(Stdio::piped())
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    let start = std::time::Instant::now();
+    loop {
+        if child.try_wait().map_err(|e| e.to_string())?.is_some() {
+            break;
+        }
+        if start.elapsed() >= Duration::from_secs(8) {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err("Wallpaper Engine chưa phản hồi. Hãy mở ứng dụng rồi kết nối lại.".into());
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+    let output = child.wait_with_output().map_err(|e| e.to_string())?;
+    if !output.status.success() {
+        return Err("Wallpaper Engine chưa trả về wallpaper đang chạy.".into());
+    }
+    let raw = String::from_utf8_lossy(&output.stdout);
+    let path = raw
+        .lines()
+        .rev()
+        .map(|s| PathBuf::from(s.trim().trim_matches('"')))
+        .find(|p| p.exists() && p.is_absolute())
+        .ok_or("Không tìm thấy wallpaper đang chạy. Kiểm tra Wallpaper Engine và số màn hình.")?;
+    let dir = if path.is_dir() {
+        path.as_path()
+    } else {
+        path.parent().ok_or("Thiếu thư mục wallpaper")?
+    };
+    if let Some((project, metadata)) = dir.ancestors().take(5).find_map(|p| {
+        let project = p.join("project.json");
+        let metadata: serde_json::Value =
+            serde_json::from_reader(fs::File::open(&project).ok()?).ok()?;
+        Some((project, metadata))
+    }) {
+        let title = metadata["title"]
+            .as_str()
+            .map(str::to_owned)
+            .unwrap_or_else(|| {
+                dir.file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .into_owned()
+            });
+        return Ok(ActiveWallpaper {
+            source: project,
+            project: true,
+            title,
+        });
+    }
+    let ext = path
+        .extension()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_lowercase();
+    if !matches!(ext.as_str(), "mp4" | "webm" | "mkv" | "mov" | "gif" | "avi") {
+        return Err("Dự án Web/Scene đang chạy thiếu project.json.".into());
+    }
+    Ok(ActiveWallpaper {
+        title: path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned(),
+        source: path,
+        project: false,
+    })
 }

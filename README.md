@@ -44,3 +44,9 @@ Dự án Video dùng tệp nguồn. Web và Scene cần Wallpaper Engine đang c
 
 ## Dữ liệu
 Cấu hình và trạng thái nằm ở `%APPDATA%\kanali-rs\` (`config.json`, `state.json`). Nếu chương trình lỗi, xem `crash.log` trong thư mục đó.
+
+### Kết nối với ứng dụng Wallpaper Engine
+
+Trong **Customization → Wallpaper Engine**, chọn số màn hình PC (bắt đầu từ 0) rồi bấm **Kết nối / đọc wallpaper đang chạy**. Lite hỏi ứng dụng đang chạy bằng lệnh `getWallpaper`. Sau khi thấy tên wallpaper, bấm **Nhập vào PANORAMA** để lấy nội dung hiện tại. Đổi wallpaper trên desktop rồi bấm đọc lại để cập nhật lựa chọn. Steam Workshop vẫn dùng để tìm và tải nội dung mới.
+
+Preset và Customization hiển thị số đo trong bảng và trên preview của các mục đã chọn. CPU Usage và RAM được lấy trực tiếp từ Windows. GPU Usage và xung nhịp dùng nguồn Windows khi khả dụng; driver NVIDIA và LibreHardwareMonitor bổ sung cảm biến tùy phần cứng. Dấu gạch ngang biểu thị nguồn chưa trả về giá trị.

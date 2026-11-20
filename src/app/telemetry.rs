@@ -15,9 +15,8 @@ pub struct Sampler {
 }
 
 impl Sampler {
-    pub fn publish(&mut self, file: &mut File, layout: &Layout) -> Result<(), String> {
-        if layout
-            .metrics
+    pub fn readings(&mut self, metrics: &[String]) -> std::collections::BTreeMap<String, String> {
+        if metrics
             .iter()
             .any(|m| !matches!(m.as_str(), "CPU" | "RAM" | "Date & Time"))
         {
@@ -27,11 +26,8 @@ impl Sampler {
         } else {
             self.sensors = None;
         }
-        if layout.metrics.is_empty() {
-            return Ok(());
-        }
-        let mut labels = Vec::new();
-        for (i, metric) in layout.metrics.iter().take(3).enumerate() {
+        let mut values = std::collections::BTreeMap::new();
+        for metric in metrics {
             let value = match metric.as_str() {
                 "CPU" => {
                     let (mut idle, mut kernel, mut user) = (
@@ -76,15 +72,28 @@ impl Sampler {
                         t.wDay, t.wMonth, t.wHour, t.wMinute
                     )
                 }
-                name => format!(
-                    "{name}  {}",
-                    self.sensors
-                        .as_ref()
-                        .and_then(|s| s.latest.get(name))
-                        .map(String::as_str)
-                        .unwrap_or("—")
-                ),
+                name => match self.sensors.as_ref().and_then(|s| s.latest.get(name)) {
+                    Some(value) => format!("{name}  {value}"),
+                    None => continue,
+                },
             };
+            values.insert(metric.clone(), value);
+        }
+        values
+    }
+
+    pub fn publish(&mut self, file: &mut File, layout: &Layout) -> Result<(), String> {
+        if layout.metrics.is_empty() {
+            self.sensors = None;
+            return Ok(());
+        }
+        let values = self.readings(&layout.metrics);
+        let mut labels = Vec::new();
+        for (i, key) in layout.metrics.iter().take(3).enumerate() {
+            let value = values
+                .get(key)
+                .cloned()
+                .unwrap_or_else(|| format!("{key}  —"));
             labels.push(proto::f_bytes(
                 2,
                 &[proto::f_varint(1, i as u64 + 1), proto::f_str(2, &value)].concat(),
@@ -100,5 +109,25 @@ impl Sampler {
             ]
             .concat(),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn native_preview_has_numbers_without_usb() {
+        let metrics = [
+            "CPU".to_string(),
+            "RAM".to_string(),
+            "Date & Time".to_string(),
+        ];
+        let mut s = Sampler::default();
+        s.readings(&metrics);
+        std::thread::sleep(std::time::Duration::from_millis(150));
+        let result = s.readings(&metrics);
+        for k in metrics {
+            assert!(result[&k].contains(|c: char| c.is_ascii_digit()));
+        }
     }
 }

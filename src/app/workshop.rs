@@ -174,3 +174,43 @@ pub fn import_gif(id: &str) -> Result<String, String> {
     drop(output);
     super::media::import(path, false)
 }
+
+/// Enumerate installed Workshop and locally authored projects in all Steam libraries.
+pub fn installed_projects() -> Result<Vec<(String, PathBuf)>, String> {
+    let mut projects = Vec::new();
+    for lib in libraries()? {
+        for root in [
+            lib.join("workshop/content/431960"),
+            lib.join("common/wallpaper_engine/projects/myprojects"),
+            lib.join("common/wallpaper_engine/projects/defaultprojects"),
+        ] {
+            let Ok(dirs) = std::fs::read_dir(root) else {
+                continue;
+            };
+            for dir in dirs.flatten() {
+                let path = dir.path().join("project.json");
+                if !path
+                    .metadata()
+                    .is_ok_and(|m| m.is_file() && m.len() < 4 * 1024 * 1024)
+                {
+                    continue;
+                }
+                let Some(meta) = config::load_opt::<serde_json::Value>(&path) else {
+                    continue;
+                };
+                if !meta["type"].as_str().is_some_and(|t| {
+                    matches!(t.to_ascii_lowercase().as_str(), "video" | "web" | "scene")
+                }) {
+                    continue;
+                }
+                let name = meta["title"]
+                    .as_str()
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| dir.file_name().to_string_lossy().into_owned());
+                projects.push((name, path));
+            }
+        }
+    }
+    projects.sort_by_cached_key(|p| p.0.to_lowercase());
+    Ok(projects)
+}

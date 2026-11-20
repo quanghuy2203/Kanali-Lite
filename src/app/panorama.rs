@@ -7,6 +7,20 @@ fn title_for(name: &str) -> String {
         .unwrap_or_else(|| label_of(name))
 }
 
+pub(super) const METRICS: &[(&str, &str)] = &[
+    ("CPU Temperature", "CPU Temperature"),
+    ("CPU Frequency", "CPU Frequency"),
+    ("CPU", "CPU Usage"),
+    ("CPU Power", "CPU Power"),
+    ("GPU Temperature", "GPU Temperature"),
+    ("GPU Frequency", "GPU Frequency"),
+    ("GPU Usage", "GPU Usage"),
+    ("GPU Power", "GPU Power"),
+    ("Memory Frequency", "Memory Frequency"),
+    ("RAM", "Memory Utilization"),
+    ("Date & Time", "Date & Time"),
+];
+
 impl App {
     fn artwork(&mut self, ui: &egui::Ui, name: &str, rect: Rect, animate: bool) -> bool {
         if name.is_empty() {
@@ -19,9 +33,18 @@ impl App {
                     .ok()
                     .map(|f| (f, [240, 116]))
                     .or_else(|| {
-                        std::fs::read(path.with_extension("preset.rgb"))
+                        std::fs::read(path.with_extension("numbered.rgb"))
                             .ok()
-                            .map(|f| (f, [640, 310]))
+                            .map(|f| {
+                                (
+                                    f,
+                                    if crate::presets::title(name).is_some() {
+                                        [456, 320]
+                                    } else {
+                                        [640, 310]
+                                    },
+                                )
+                            })
                     })?;
             let size = dimensions[0] * dimensions[1] * 3;
             if frames.is_empty() || frames.len() > size * 8 || frames.len() % size != 0 {
@@ -57,9 +80,12 @@ impl App {
             }
             ui.ctx().request_repaint_after(Duration::from_millis(500));
         }
+        let aspect = clip.dimensions[0] as f32 / clip.dimensions[1] as f32;
+        let width = rect.width().min(rect.height() * aspect);
+        let fit = Rect::from_center_size(rect.center(), vec2(width, width / aspect));
         ui.painter().image(
             clip.texture.id(),
-            rect,
+            fit,
             Rect::from_min_max(egui::pos2(0., 0.), egui::pos2(1., 1.)),
             Color32::WHITE,
         );
@@ -94,6 +120,41 @@ impl App {
                 Color32::WHITE,
             );
         }
+        if focus && !self.draft.metrics.is_empty() && rect.height() > 110. {
+            let painter = ui.painter_at(rect.shrink(4.));
+            let text = self
+                .draft
+                .metrics
+                .iter()
+                .take(3)
+                .map(|key| {
+                    self.readings
+                        .get(key)
+                        .cloned()
+                        .unwrap_or_else(|| format!("{key}  —"))
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            let (x, align) = match self.draft.alignment {
+                2 => (rect.center().x, Align2::CENTER_BOTTOM),
+                3 => (rect.right() - 12., Align2::RIGHT_BOTTOM),
+                _ => (rect.left() + 12., Align2::LEFT_BOTTOM),
+            };
+            let color = if self.draft.dark_text {
+                Color32::BLACK
+            } else {
+                Color32::WHITE
+            };
+            painter.text(
+                egui::pos2(x, rect.bottom() - 10.),
+                align,
+                text,
+                FontId::proportional(
+                    (self.draft.font_size as f32 * rect.height() / 480.).clamp(12., 28.),
+                ),
+                color,
+            );
+        }
         ui.painter().rect_stroke(
             rect,
             8.,
@@ -108,7 +169,7 @@ impl App {
         }
         let mut i = files.iter().position(|f| f == &self.carousel).unwrap_or(0);
         let w = ui.available_width();
-        let h = (w * 0.36).clamp(155., 350.);
+        let h = (w * 0.32).clamp(155., 300.);
         let (area, _) = ui.allocate_exact_size(vec2(w, h + 20.), Sense::hover());
         let mut shown = Vec::new();
         for offset in [-2isize, 2, -1, 1, 0] {
@@ -117,7 +178,10 @@ impl App {
             }
             let j = (i as isize + offset).rem_euclid(files.len() as isize) as usize;
             let depth = offset.unsigned_abs() as f32;
-            let size = vec2(w * 0.66 - depth * w * 0.08, h * (1. - 0.12 * depth));
+            let size = vec2(
+                (w * 0.66).min(h * 1.6) - depth * w * 0.055,
+                h * (1. - 0.12 * depth),
+            );
             let rect =
                 Rect::from_center_size(area.center() + vec2(offset as f32 * w * 0.103, 0.), size);
             self.stage(ui, rect, &files[j], offset == 0);
@@ -129,15 +193,24 @@ impl App {
             (area.right() - 18., "›", 1),
         ] {
             let rect = Rect::from_center_size(egui::pos2(x, area.center().y), vec2(34., 34.));
-            if ui
-                .put(
-                    rect,
-                    egui::Button::new(RichText::new(label).size(24.).color(BG))
-                        .fill(Color32::WHITE)
-                        .rounding(17.),
-                )
-                .clicked()
-            {
+            let resp = ui.interact(rect, ui.id().with(("carousel-arrow", step)), Sense::click());
+            ui.painter().circle_filled(
+                rect.center(),
+                17.,
+                if resp.hovered() {
+                    ACCENT
+                } else {
+                    Color32::WHITE
+                },
+            );
+            ui.painter().text(
+                rect.center(),
+                Align2::CENTER_CENTER,
+                label,
+                FontId::proportional(24.),
+                BG,
+            );
+            if resp.clicked() {
                 i = (i as isize + step).rem_euclid(files.len() as isize) as usize;
             }
         }
@@ -163,39 +236,50 @@ impl App {
     }
 
     fn metrics(&mut self, ui: &mut egui::Ui) {
-        ui.strong("System Information Display · tối đa 3 mục");
+        ui.strong("Thông số trực tiếp · chọn tối đa 3");
         ui.horizontal_wrapped(|ui| {
-            for (key, label) in [
-                ("CPU Temperature", "CPU Temperature"),
-                ("CPU Frequency", "CPU Frequency"),
-                ("CPU", "CPU Usage"),
-                ("CPU Power", "CPU Power"),
-                ("GPU Temperature", "GPU Temperature"),
-                ("GPU Frequency", "GPU Frequency"),
-                ("GPU Usage", "GPU Usage"),
-                ("GPU Power", "GPU Power"),
-                ("Memory Frequency", "Memory Frequency"),
-                ("RAM", "Memory Utilization"),
-                ("Date & Time", "Date & Time"),
-            ] {
-                let mut selected = self.draft.metrics.iter().any(|m| m == key);
-                let enabled = selected || self.draft.metrics.len() < 3;
-                if ui
-                    .add_enabled(enabled, egui::Checkbox::new(&mut selected, label))
-                    .on_hover_text(if matches!(key, "CPU" | "RAM" | "Date & Time") {
-                        "Windows"
-                    } else {
-                        "Cần cảm biến từ LibreHardwareMonitor đang chạy"
-                    })
-                    .changed()
-                {
-                    self.draft.metrics.retain(|m| m != key);
-                    if selected {
-                        self.draft.metrics.push(key.into());
+            let cols = if ui.available_width() > 660. { 3 } else { 2 };
+            egui::Grid::new("live-sensor-grid")
+                .num_columns(cols)
+                .spacing(vec2(16., 7.))
+                .show(ui, |ui| {
+                    for (index, &(key, label)) in METRICS.iter().enumerate() {
+                        let mut selected = self.draft.metrics.iter().any(|m| m == key);
+                        let enabled = selected || self.draft.metrics.len() < 3;
+                        if ui
+                            .add_enabled(
+                                enabled,
+                                egui::Checkbox::new(
+                                    &mut selected,
+                                    format!(
+                                        "{}    {}",
+                                        label,
+                                        self.readings
+                                            .get(key)
+                                            .map(|v| v.strip_prefix(key).unwrap_or(v).trim())
+                                            .unwrap_or("—")
+                                    ),
+                                ),
+                            )
+                            .on_hover_text(if matches!(key, "CPU" | "RAM" | "Date & Time") {
+                                "Windows"
+                            } else {
+                                "Theo phần cứng: Windows, NVIDIA hoặc LibreHardwareMonitor"
+                            })
+                            .changed()
+                        {
+                            self.draft.metrics.retain(|m| m != key);
+                            if selected {
+                                self.draft.metrics.push(key.into());
+                            }
+                        }
+                        if index % cols == cols - 1 {
+                            ui.end_row();
+                        }
                     }
-                }
-            }
+                });
         });
+        ui.small("—  Chưa có số đo. Nhiệt độ và công suất cần driver NVIDIA hoặc cảm biến LibreHardwareMonitor tương ứng.");
         ui.add_enabled_ui(!self.draft.metrics.is_empty(), |ui| {
             ui.horizontal_wrapped(|ui| {
                 ui.checkbox(&mut self.draft.dark_text, "Chữ đen");
@@ -213,14 +297,40 @@ impl App {
         });
     }
 
-    pub(super) fn panorama(&mut self, ui: &mut egui::Ui) {
+    pub(super) fn panorama_header(&mut self, ui: &mut egui::Ui) {
         ui.horizontal_wrapped(|ui| {
             ui.heading("PANORAMA");
             ui.selectable_value(&mut self.display_tab, false, "Preset");
             ui.selectable_value(&mut self.display_tab, true, "Customization");
             ui.checkbox(&mut self.draft.enabled, "Screen");
+            let available = |name: &str| self.state.files.iter().any(|p| file_of(p) == name);
+            let valid = if !self.display_tab {
+                available(&self.carousel)
+            } else if self.draft.split {
+                available(&self.draft.left) && available(&self.draft.right)
+            } else {
+                available(&self.full)
+            };
+            ui.add_enabled_ui(valid, |ui| {
+                if primary_button(ui, "Lưu vào màn hình").clicked() {
+                    self.cfg.layout = self.draft.clone();
+                    if self.display_tab {
+                        self.cfg.playing = self.full.clone();
+                    } else {
+                        self.cfg.layout.split = false;
+                        self.cfg.playing = self.carousel.clone();
+                    }
+                    match config::save(&config::config_path(), &self.cfg) {
+                        Ok(()) => self.media_note = "Đã lưu cấu hình.".into(),
+                        Err(e) => self.media_note = e.to_string(),
+                    }
+                }
+            });
         });
         ui.separator();
+    }
+
+    pub(super) fn panorama(&mut self, ui: &mut egui::Ui) {
         let files: Vec<String> = self
             .state
             .files
@@ -242,7 +352,7 @@ impl App {
                     });
             });
             let w = ui.available_width();
-            let h = (w * 0.32).clamp(145., 280.);
+            let h = (w * 0.26).clamp(145., 245.);
             let (area, _) = ui.allocate_exact_size(vec2(w, h), Sense::hover());
             let names = if self.draft.split {
                 vec![self.draft.left.clone(), self.draft.right.clone()]
@@ -305,29 +415,92 @@ impl App {
         }
         ui.separator();
         self.metrics(ui);
-        let valid = if !self.display_tab {
-            files.contains(&self.carousel)
-        } else if self.draft.split {
-            files.contains(&self.draft.left) && files.contains(&self.draft.right)
-        } else {
-            files.contains(&self.full)
-        };
-        ui.add_enabled_ui(valid, |ui| {
-            if primary_button(ui, "Lưu vào màn hình").clicked() {
-                self.cfg.layout = self.draft.clone();
-                if self.display_tab {
-                    self.cfg.playing = self.full.clone();
-                } else {
-                    self.cfg.layout.split = false;
-                    self.cfg.playing = self.carousel.clone();
-                }
-                match config::save(&config::config_path(), &self.cfg) {
-                    Ok(()) => self.media_note = "Đã lưu cấu hình.".into(),
-                    Err(e) => self.media_note = e.to_string(),
-                }
-            }
-        });
         if self.display_tab {
+            ui.separator();
+            ui.strong("Wallpaper Engine");
+            ui.horizontal_wrapped(|ui| {
+                ui.label("Màn hình PC");
+                if ui
+                    .add(egui::DragValue::new(&mut self.wallpaper_monitor).range(0..=31))
+                    .changed()
+                {
+                    self.wallpaper = None;
+                    self.wallpaper_query = None;
+                    self.wallpaper_note.clear();
+                }
+                if ui
+                    .add_enabled(
+                        self.wallpaper_query.is_none(),
+                        egui::Button::new("Kết nối / đọc wallpaper đang chạy"),
+                    )
+                    .clicked()
+                {
+                    let monitor = self.wallpaper_monitor;
+                    let (tx, rx) = std::sync::mpsc::channel();
+                    self.wallpaper_query = Some(rx);
+                    self.wallpaper = None;
+                    self.wallpaper_note = "Đang hỏi Wallpaper Engine…".into();
+                    std::thread::spawn(move || {
+                        let _ = tx.send(crate::media::active_wallpaper(monitor));
+                    });
+                }
+                if let Some(active) = &self.wallpaper {
+                    ui.label(&active.title);
+                    if ui
+                        .add_enabled(
+                            self.media_job.is_none(),
+                            egui::Button::new("Nhập vào PANORAMA"),
+                        )
+                        .clicked()
+                    {
+                        let path = active.source.clone();
+                        let project = active.project;
+                        let (tx, rx) = std::sync::mpsc::channel();
+                        self.media_job = Some(rx);
+                        self.media_note = "Đang chuẩn bị wallpaper…".into();
+                        std::thread::spawn(move || {
+                            let _ = tx.send(crate::media::import(path, project));
+                        });
+                    }
+                }
+            });
+            ui.horizontal_wrapped(|ui| {
+                if ui
+                    .add_enabled(
+                        self.library_query.is_none(),
+                        egui::Button::new("Đọc thư viện đã cài"),
+                    )
+                    .clicked()
+                {
+                    let (tx, rx) = std::sync::mpsc::channel();
+                    self.library_query = Some(rx);
+                    std::thread::spawn(move || {
+                        let _ = tx.send(crate::workshop::installed_projects());
+                    });
+                }
+                if !self.wallpaper_library.is_empty() {
+                    egui::ComboBox::from_id_salt("installed-project")
+                        .selected_text("Chọn wallpaper từ thư viện")
+                        .show_ui(ui, |ui| {
+                            for (name, path) in &self.wallpaper_library {
+                                if ui
+                                    .selectable_label(false, name)
+                                    .on_hover_text(path.display().to_string())
+                                    .clicked()
+                                {
+                                    self.wallpaper = Some(crate::media::ActiveWallpaper {
+                                        title: name.clone(),
+                                        source: path.clone(),
+                                        project: true,
+                                    });
+                                }
+                            }
+                        });
+                }
+            });
+            if !self.wallpaper_note.is_empty() {
+                ui.label(&self.wallpaper_note);
+            }
             ui.separator();
             ui.strong("Upload Media Library");
             ui.horizontal_wrapped(|ui| {
@@ -443,5 +616,42 @@ impl App {
                 config::send_command("refresh");
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn caption_below_carousel_at_desktop_and_compact_sizes() {
+        for width in [470., 900.] {
+            let ctx = egui::Context::default();
+            let mut app = App::new();
+            let input = egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    vec2(width + 30., 760.),
+                )),
+                ..Default::default()
+            };
+            let _ = ctx.run(input, |ctx| {
+                egui::CentralPanel::default()
+                    .show(ctx, |ui| {
+                        ui.set_width(width);
+                        let top = ui.cursor().top();
+                        app.carousel(
+                            ui,
+                            &[
+                                "default_05.mp4.h264_2240x1080".into(),
+                                "default_06.mp4.h264_2240x1080".into(),
+                            ],
+                        );
+                        let bottom = top + (width * 0.32).clamp(155., 300.) + 20.;
+                        assert!(ui.cursor().top() > bottom);
+                    })
+                    .inner
+            });
+        }
     }
 }

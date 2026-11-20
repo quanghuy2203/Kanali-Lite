@@ -26,6 +26,17 @@ impl Worker {
         let (tx, result) = mpsc::sync_channel(1);
         std::thread::spawn(move || {
             let Ok(com) = COMLibrary::new() else { return };
+            let nvidia = std::env::var_os("SystemRoot")
+                .map(std::path::PathBuf::from)
+                .map(|p| p.join("System32/nvml.dll"))
+                .filter(|p| p.is_file())
+                .and_then(|p| {
+                    nvml_wrapper::Nvml::builder()
+                        .lib_path(p.as_os_str())
+                        .init()
+                        .ok()
+                });
+            let native = WMIConnection::new(com.into()).ok();
             let mut connection = None;
             while rx.recv().is_ok() {
                 if connection.is_none() {
@@ -84,10 +95,38 @@ impl Worker {
                         Err(_) => connection = None,
                     }
                 }
-                let readings = values
+                let mut readings: HashMap<String, String> = values
                     .into_iter()
                     .map(|(k, (_, n, u))| (k, format!("{n:.0} {u}")))
                     .collect();
+                if let Some(nv) = &nvidia {
+                    use nvml_wrapper::enum_wrappers::device::{Clock, TemperatureSensor};
+                    if let Ok(gpu) = nv.device_by_index(0) {
+                        if let Ok(n) = gpu.temperature(TemperatureSensor::Gpu) {
+                            readings
+                                .entry("GPU Temperature".into())
+                                .or_insert(format!("{n} °C"));
+                        }
+                        if let Ok(n) = gpu.power_usage() {
+                            readings
+                                .entry("GPU Power".into())
+                                .or_insert(format!("{:.1} W", n as f32 / 1000.));
+                        }
+                        if let Ok(n) = gpu.clock_info(Clock::Graphics) {
+                            readings
+                                .entry("GPU Frequency".into())
+                                .or_insert(format!("{n} MHz"));
+                        }
+                        if let Ok(rate) = gpu.utilization_rates() {
+                            readings
+                                .entry("GPU Usage".into())
+                                .or_insert(format!("{} %", rate.gpu));
+                        }
+                    }
+                }
+                if let Some(native) = &native {
+                    native_readings(native, &mut readings);
+                }
                 if tx.send(readings).is_err() {
                     break;
                 }
@@ -104,5 +143,61 @@ impl Worker {
             self.latest = v;
         }
         let _ = self.poll.try_send(());
+    }
+}
+
+fn native_readings(db: &WMIConnection, out: &mut HashMap<String, String>) {
+    #[derive(Deserialize)]
+    #[serde(rename_all = "PascalCase")]
+    struct Engine {
+        name: String,
+        utilization_percentage: u64,
+    }
+    #[derive(Deserialize)]
+    #[serde(rename_all = "PascalCase")]
+    struct Cpu {
+        current_clock_speed: u32,
+    }
+    #[derive(Deserialize)]
+    #[serde(rename_all = "PascalCase")]
+    struct Memory {
+        configured_clock_speed: u32,
+    }
+    if !out.contains_key("GPU Usage") {
+        if let Ok(rows)=db.raw_query::<Engine>("SELECT Name,UtilizationPercentage FROM Win32_PerfFormattedData_GPUPerformanceCounters_GPUEngine") {
+            let mut engines=HashMap::<String,u64>::new();
+            for row in rows {
+                if let Some((_,key))=row.name.split_once("_luid_"){
+                    *engines.entry(key.into()).or_default()+=row.utilization_percentage;
+                }
+            }
+            if let Some(n)=engines.values().max(){out.insert("GPU Usage".into(),format!("{} %",(*n).min(100)));}
+        }
+    }
+    if !out.contains_key("CPU Frequency") {
+        if let Ok(rows) = db.raw_query::<Cpu>("SELECT CurrentClockSpeed FROM Win32_Processor") {
+            if let Some(n) = rows
+                .iter()
+                .map(|r| r.current_clock_speed)
+                .max()
+                .filter(|v| *v > 0)
+            {
+                out.insert("CPU Frequency".into(), format!("{n} MHz"));
+            }
+        }
+    }
+    if !out.contains_key("Memory Frequency") {
+        if let Ok(rows) =
+            db.raw_query::<Memory>("SELECT ConfiguredClockSpeed FROM Win32_PhysicalMemory")
+        {
+            if let Some(n) = rows
+                .iter()
+                .map(|r| r.configured_clock_speed)
+                .max()
+                .filter(|v| *v > 0)
+            {
+                out.insert("Memory Frequency".into(), format!("{n} MHz"));
+            }
+        }
     }
 }

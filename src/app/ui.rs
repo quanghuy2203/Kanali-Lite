@@ -195,8 +195,16 @@ struct App {
     clips: std::collections::HashMap<String,Option<Clip>>,
     carousel: String,
     draft: config::Layout,
+    sampler:crate::telemetry::Sampler,
+    readings:std::collections::BTreeMap<String,String>,
     full: String,
     right_slot: bool,
+    wallpaper:Option<crate::media::ActiveWallpaper>,
+    wallpaper_query:Option<std::sync::mpsc::Receiver<Result<crate::media::ActiveWallpaper,String>>>,
+    wallpaper_library: Vec<(String,std::path::PathBuf)>,
+    library_query:Option<std::sync::mpsc::Receiver<Result<Vec<(String,std::path::PathBuf)>,String>>>,
+    wallpaper_monitor:u32,
+    wallpaper_note:String,
     workshop_id: Option<u64>,
     gif_id:Option<String>,
     assets_ready: std::sync::mpsc::Receiver<()> ,
@@ -213,7 +221,7 @@ impl App {
         let state: State = config::load_opt(&config::state_path()).unwrap_or_default();
         let (tx, assets_ready)=std::sync::mpsc::channel();
         std::thread::spawn(move || { crate::presets::cache(); let _=tx.send(()); });
-        Self { draft:cfg.layout.clone(), full:cfg.playing.clone(), carousel: cfg.playing.clone(), clips:Default::default(), right_slot:false, workshop_id:None, gif_id:None, assets_ready, media_job: None, media_note: String::new(), page: Page::Home, display_tab: false, cfg, state, last_read: Instant::now(), autostart: autostart::is_enabled(), notice: String::new() }
+        Self { sampler:Default::default(), readings:Default::default(), draft:cfg.layout.clone(), full:cfg.playing.clone(), carousel: cfg.playing.clone(), clips:Default::default(), right_slot:false, wallpaper:None,wallpaper_query:None,library_query:None,wallpaper_library:Vec::new(),wallpaper_monitor:0,wallpaper_note:String::new(),workshop_id:None, gif_id:None, assets_ready, media_job: None, media_note: String::new(), page: Page::Home, display_tab: false, cfg, state, last_read: Instant::now(), autostart: autostart::is_enabled(), notice: String::new() }
     }
 
     fn save(&self) {
@@ -377,6 +385,22 @@ impl App {
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        if let Some(rx)=&self.library_query {
+            match rx.try_recv(){
+                Ok(Ok(items))=>{ self.wallpaper_note=format!("Thư viện Wallpaper Engine: {} dự án",items.len());self.wallpaper_library=items;self.library_query=None; }
+                Ok(Err(e))=>{ self.wallpaper_note=e;self.library_query=None; }
+                Err(std::sync::mpsc::TryRecvError::Disconnected)=>{self.library_query=None;self.wallpaper_note="Đọc thư viện bị gián đoạn".into();}
+                _=>()
+            }
+        }
+        if let Some(rx)=&self.wallpaper_query {
+            match rx.try_recv() {
+                Ok(Ok(active)) => {self.wallpaper=Some(active); self.wallpaper_note.clear();self.wallpaper_query=None;}
+                Ok(Err(e)) => {self.wallpaper=None;self.wallpaper_note=e;self.wallpaper_query=None;}
+                Err(std::sync::mpsc::TryRecvError::Disconnected)=>{self.wallpaper_note="Kết nối bị gián đoạn".into();self.wallpaper_query=None;}
+                _=>()
+            }
+        }
         if let Some(job) = &self.media_job {
             match job.try_recv() {
                 Ok(result) => {
@@ -399,6 +423,10 @@ impl eframe::App for App {
                 }
                 self.state = s;
             }
+            if self.page==Page::Panorama {
+                let keys=panorama::METRICS.iter().map(|(k,_)|k.to_string()).collect::<Vec<_>>();
+                self.readings=self.sampler.readings(&keys);
+            } else {self.sampler=Default::default();}
             self.workshop_id = crate::workshop::selected();
             self.gif_id=config::load_opt(&config::data_dir().join("giphy-item.json"));
             self.last_read = Instant::now();
@@ -428,8 +456,8 @@ impl eframe::App for App {
         egui::CentralPanel::default()
             .frame(egui::Frame::none().fill(BG).inner_margin(Margin::same(16.0)))
             .show(ctx, |ui| {
-                if self.page != Page::Panorama {self.header(ui);}
-                egui::ScrollArea::vertical().id_salt(self.page).show(ui, |ui| {
+                if self.page == Page::Panorama {self.panorama_header(ui);} else {self.header(ui); }
+                egui::ScrollArea::vertical().id_salt((self.page,self.display_tab)).show(ui, |ui| {
                     self.status_card(ui);
                     match self.page {
                         Page::Home => {
