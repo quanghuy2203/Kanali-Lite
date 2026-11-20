@@ -1843,10 +1843,11 @@ dependencies = [
 
 [[package]]
 name = "kanali-rs"
-version = "0.2.9"
+version = "0.2.10"
 dependencies = [
  "eframe",
  "image",
+ "libloading 0.8.9",
  "nvml-wrapper",
  "rfd",
  "serde",

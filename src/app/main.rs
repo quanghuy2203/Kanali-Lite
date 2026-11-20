@@ -7,6 +7,7 @@
 
 mod daemon;
 mod media;
+mod mediax;
 mod giphy;
 mod library;
 mod presets;
@@ -30,6 +31,11 @@ fn main() {
     }));
 
     let args: Vec<String> = env::args().skip(1).collect();
+    if let [action, input, output] = &args[..] {
+        if action == "--encode-mediax" {
+            std::process::exit(mediax::worker(input, output).err().unwrap_or(0));
+        }
+    }
     let has = |f: &str| args.iter().any(|a| a == f);
 
     // Dọn file chương trình cũ còn sót sau lần cập nhật trước.

@@ -28,7 +28,7 @@ Từ v0.2.2, bộ cập nhật tra lượt build thành công của nhánh main 
 
 ## Thư viện PANORAMA
 
-Chức năng nhập và tạo xem trước cần FFmpeg cho Windows có libx264. Đặt `ffmpeg.exe` cạnh Kanali hoặc thêm vào PATH. Chọn **Thêm video / GIF** để chuyển mã thành H.264 cho PANORAMA. Từ 0.2.8, Lite xuất H.264 Main Level 4.1 với thông số đồng bộ của KANALI. Nếu clip nhập từ bản cũ khiến tản đứng hình, nhập lại từ nguồn và lưu bản mới. Giữ giao diện mở trong lúc chuyển mã. Khi tệp đã vào hàng chờ, tiến trình nền gửi theo khối qua USB, kiểm tra phản hồi và đọc lại danh sách trên màn hình. Bấm vào video trong thư viện để phát.
+Chức năng nhập và tạo xem trước cần FFmpeg cho Windows có libx264. Đặt `ffmpeg.exe` cạnh Kanali hoặc thêm vào PATH. Chọn **Thêm video / GIF** để chuyển mã thành H.264 cho PANORAMA. Khi tìm thấy bản KANALI gốc đã cài, Lite dùng bộ mã hóa MediaX của KANALI để tạo video toàn màn hình 2240 × 1080 ở 60 fps. Nếu thiếu MediaX hoặc bộ mã hóa gặp lỗi, Lite dùng FFmpeg và ghi tên bộ mã hóa trong thông báo nhập. Nếu clip nhập từ bản cũ khiến tản đứng hình, nhập lại từ nguồn và lưu bản mới. Giữ giao diện mở trong lúc chuyển mã. Khi tệp đã vào hàng chờ, tiến trình nền gửi theo khối qua USB, kiểm tra phản hồi và đọc lại danh sách trên màn hình. Bấm vào video trong thư viện để phát.
 
 ### Preset và Customization
 

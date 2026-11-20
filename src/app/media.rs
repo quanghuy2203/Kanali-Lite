@@ -223,7 +223,7 @@ const ENCODE: &[&str] = &[
     "-x264-params", "repeat-headers=1:annexb=1:aud=1:b-pyramid=0:weightp=0:ref=3:range=pc:colorprim=bt709:transfer=bt709:colormatrix=bt709",
     "-color_range", "pc", "-crf", "23", "-maxrate", "12M", "-bufsize", "24M", "-g", "30", "-f", "h264",
 ];
-const SCALE: &str="fps=30,scale=2240:1080:force_original_aspect_ratio=decrease:out_range=full:out_color_matrix=bt709,pad=2240:1080:(ow-iw)/2:(oh-ih)/2,setsar=1";
+const SCALE: &str="fps=60,scale=2240:1080:force_original_aspect_ratio=decrease:out_range=full:out_color_matrix=bt709,pad=2240:1080:(ow-iw)/2:(oh-ih)/2,setsar=1";
 
 fn contains_picture(samples: &[u8]) -> bool {
     samples
@@ -236,11 +236,11 @@ fn first_picture(path: &Path) -> Result<Option<f64>, String> {
     use std::io::{ErrorKind, Read};
     use std::process::Stdio;
     let mut child = ffmpeg()
-        .args(["-threads", "2", "-f", "h264", "-i"])
+        .args(["-threads", "2", "-i"])
         .arg(path)
         .args([
             "-vf",
-            r"select=not(mod(n\,15)),scale=64:32,format=gray",
+            "fps=2:round=up,scale=64:32,format=gray",
             "-vsync",
             "vfr",
             "-f",
@@ -273,13 +273,17 @@ fn first_picture(path: &Path) -> Result<Option<f64>, String> {
     result
 }
 
-fn capture_scene(w: &Wallpaper, target: &Path) -> Result<f64, String> {
+fn capture_scene(w: &Wallpaper, target: &Path, intermediate: bool) -> Result<f64, String> {
+    let filter = if intermediate { "fps=30,format=yuv420p" } else { SCALE };
+    let capture_args: &[&str] = if intermediate {
+        &["-an", "-c:v", "libx264", "-threads", "2", "-preset", "ultrafast", "-crf", "16", "-f", "mp4"]
+    } else { ENCODE };
     let mut errors = Vec::new();
     for gpu in [true, false] {
         let mut cmd = ffmpeg();
         if gpu {
             // Match only our pop-out window, including when another app covers it.
-            cmd.args(["-filter_complex",&format!("gfxcapture=window_title=^{}$:capture_cursor=0:max_framerate=30,hwdownload,format=bgra,{SCALE}[video]",w.window),"-map","[video]"]);
+            cmd.args(["-filter_complex",&format!("gfxcapture=window_title=^{}$:capture_cursor=0:max_framerate=30,hwdownload,format=bgra,{filter}[video]",w.window),"-map","[video]"]);
         } else {
             cmd.args([
                 "-f",
@@ -291,14 +295,14 @@ fn capture_scene(w: &Wallpaper, target: &Path) -> Result<f64, String> {
                 "-i",
                 &format!("title={}", w.window),
                 "-vf",
-                SCALE,
+                filter,
             ]);
         }
         // Wall-clock limit also covers capture sources that stop delivering frames.
         let log = tempfile::tempfile().map_err(|e| e.to_string())?;
         let mut child = cmd
             .args(["-t", "15"])
-            .args(ENCODE)
+            .args(capture_args)
             .arg(target)
             .stderr(log.try_clone().map_err(|e| e.to_string())?)
             .spawn()
@@ -407,17 +411,34 @@ fn import_media(source: PathBuf, project: bool, wallpaper: bool) -> Result<Strin
     let temp = tempfile::NamedTempFile::new_in(&queue)
         .map_err(|e| e.to_string())?
         .into_temp_path();
-    let preview_start = if let Some(w) = &capture {
-        capture_scene(w, &temp)?
+    let native = super::mediax::installed().is_some();
+    let preview_start;
+    let mut encoder = String::from("FFmpeg");
+    if native {
+        let recording = if let Some(w) = &capture {
+            let clip = tempfile::Builder::new().suffix(".mp4").tempfile_in(&queue)
+                .map_err(|e| e.to_string())?.into_temp_path();
+            capture_scene(w, &clip, true)?;
+            Some(clip)
+        } else { None };
+        drop(capture);
+        let source: &Path = recording.as_deref().unwrap_or(&input);
+        match super::mediax::encode(source, &temp) {
+            Ok(()) => encoder = "KANALI MediaX".into(),
+            Err(e) => {
+                run(ffmpeg().arg("-i").arg(source).args(["-vf", SCALE]).args(ENCODE).arg(&*temp))?;
+                encoder = format!("FFmpeg, {e}");
+            }
+        }
+        preview_start = first_picture(&temp)?.ok_or("Video đã mã hóa chỉ có khung đen")?;
+    } else if let Some(w) = &capture {
+        preview_start = capture_scene(w, &temp, false)?;
     } else {
         run(ffmpeg().arg("-i").arg(&input).args(["-vf", SCALE]).args(ENCODE).arg(&*temp))?;
-        if wallpaper {
+        preview_start = if wallpaper {
             first_picture(&temp)?.ok_or("Wallpaper chỉ có khung đen. Đã hủy nhập.")?
-        } else {
-            0.0
-        }
-    };
-    drop(capture);
+        } else { 0.0 };
+    }
     if !(1..=500_000_000).contains(&fs::metadata(&temp).map_err(|e| e.to_string())?.len()) {
         return Err("Video sau chuyển đổi phải dưới 500 MB".into());
     }
@@ -430,7 +451,7 @@ fn import_media(source: PathBuf, project: bool, wallpaper: bool) -> Result<Strin
     make_poster_at(&temp, &name, preview_start)?;
     temp.persist_noclobber(queue.join(&name))
         .map_err(|e| e.to_string())?;
-    Ok(format!("Đã chuẩn bị {name}. Đang chờ truyền qua USB."))
+    Ok(format!("Đã chuẩn bị {name} ({encoder}). Đang chờ truyền qua USB."))
 }
 
 pub fn pending() -> Option<PathBuf> {
@@ -530,6 +551,27 @@ pub fn active_wallpaper(monitor: u32) -> Result<ActiveWallpaper, String> {
 mod capture_tests {
     use super::*;
     #[test]
+    #[ignore = "requires an installed original KANALI encoder"]
+    fn native_mediax_converts_video() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::env::set_var("APPDATA", tmp.path());
+        install_capture_tool().unwrap();
+        let source = tmp.path().join("source.mp4");
+        let output = tmp.path().join("device.h264");
+        run(ffmpeg().args(["-f", "lavfi", "-i", "testsrc2=size=480x240:rate=30:duration=2",
+                           "-c:v", "libx264"]).arg(&source)).unwrap();
+        let status = Command::new("target/release/kanali.exe").arg("--encode-mediax")
+            .arg(&source).arg(&output).status().unwrap();
+        assert!(status.success(), "MediaX returned {status}");
+        assert_eq!(first_picture(&output).unwrap(), Some(0.0));
+        let frames = ffmpeg().arg("-i").arg(&output)
+            .args(["-vf", "fps=2,scale=64:32,format=gray","-f","rawvideo","-"])
+            .output().unwrap();
+        assert!(frames.status.success());
+        let frames: Vec<_> = frames.stdout.chunks_exact(2048).collect();
+        assert!(frames.len() >= 3 && frames.windows(2).any(|p| p[0] != p[1]));
+    }
+    #[test]
     #[ignore = "downloads the pinned Windows FFmpeg distribution"]
     fn windows_capture_tool_encodes_visible_device_clip() {
         let tmp = tempfile::tempdir().unwrap();
@@ -544,7 +586,7 @@ mod capture_tests {
             .map(|(i, _)| &bytes[i + 3..]).collect();
         let sps: Vec<_> = units.iter().filter(|u| u[0] & 31 == 7).collect();
         assert!(sps.len() >= 2 && sps.iter().all(|u| u[1] == 77 && u[3] == 41));
-        assert_eq!(units.iter().filter(|u| u[0] & 31 == 9).count(), 60);
+        assert_eq!(units.iter().filter(|u| u[0] & 31 == 9).count(), 120);
         // Decode the entire stream, checking that the animation advances.
         let decoded = ffmpeg().arg("-i").arg(&clip)
             .args(["-vf", "fps=2,scale=64:32,format=gray", "-f", "rawvideo", "-"])
