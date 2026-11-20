@@ -18,11 +18,12 @@ pub fn installed() -> Option<PathBuf> {
         .map(PathBuf::from)
         .flat_map(|root| {
             [
-                root.join("KANALI/MediaX.dll"),
-                root.join("Programs/KANALI/MediaX.dll"),
+                root.join("KANALI").join("MediaX.dll"),
+                root.join("Programs").join("KANALI").join("MediaX.dll"),
             ]
         })
-        .find(|dll| dll.is_absolute() && dll.is_file())
+        .filter(|dll| dll.is_absolute() && dll.is_file())
+        .find_map(|dll| dll.canonicalize().ok())
 }
 
 pub fn encode(input: &Path, output: &Path) -> Result<(), String> {
@@ -58,10 +59,13 @@ pub fn worker(input: &str, output: &str) -> Result<(), i32> {
     // These x64 exports and argument types are the ones used by KANALI's MediaX bridge.
     unsafe {
         let lib = Library::load_with_flags(
-            dll,
+            &dll,
             LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32,
         )
-        .map_err(|_| 4)?;
+        .map_err(|err| {
+            eprintln!("LoadLibraryExW({}): {err:?}", dll.display());
+            4
+        })?;
         // MediaX owns asynchronous codec threads. The dedicated process releases it at exit.
         let lib = std::mem::ManuallyDrop::new(lib);
         let convert = lib

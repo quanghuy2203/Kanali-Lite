@@ -34,8 +34,15 @@ jobs:
           name: kanali-windows-x64-v${{ steps.package.outputs.version }}
           path: kanali-windows-x64.exe
           if-no-files-found: error
-      - name: Verify native KANALI conversion
+      - name: Restore verified KANALI archive
+        id: vendor-cache
         if: inputs.verify_mediax
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/kanali-original.zip
+          key: kanali-original-b9b0df3629b15aef1ed48662b2b7aa8c6bc778fc59e87cc6c8e059fdbc993fa2
+      - name: Download KANALI test archive
+        if: inputs.verify_mediax && steps.vendor-cache.outputs.cache-hit != 'true'
         timeout-minutes: 20
         shell: pwsh
         run: |
@@ -49,6 +56,19 @@ jobs:
             Write-Warning "Download interrupted (curl exit $result). Resuming on attempt $($attempt + 1)."
             Start-Sleep -Seconds 5
           }
+          if ((Get-FileHash $zip).Hash -ne 'b9b0df3629b15aef1ed48662b2b7aa8c6bc778fc59e87cc6c8e059fdbc993fa2') { throw 'Original KANALI archive SHA-256 mismatch' }
+      - name: Cache verified KANALI archive
+        if: inputs.verify_mediax && steps.vendor-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/kanali-original.zip
+          key: kanali-original-b9b0df3629b15aef1ed48662b2b7aa8c6bc778fc59e87cc6c8e059fdbc993fa2
+      - name: Verify native KANALI conversion
+        if: inputs.verify_mediax
+        timeout-minutes: 12
+        shell: pwsh
+        run: |
+          $zip = Join-Path $env:RUNNER_TEMP 'kanali-original.zip'
           if ((Get-FileHash $zip).Hash -ne 'b9b0df3629b15aef1ed48662b2b7aa8c6bc778fc59e87cc6c8e059fdbc993fa2') { throw 'Original KANALI archive SHA-256 mismatch' }
           $dir = Join-Path $env:RUNNER_TEMP 'kanali-original'
           Expand-Archive $zip $dir

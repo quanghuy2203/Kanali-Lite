@@ -560,9 +560,9 @@ mod capture_tests {
         let output = tmp.path().join("device.h264");
         run(ffmpeg().args(["-f", "lavfi", "-i", "testsrc2=size=480x240:rate=30:duration=2",
                            "-c:v", "libx264"]).arg(&source)).unwrap();
-        let status = Command::new("target/release/kanali.exe").arg("--encode-mediax")
-            .arg(&source).arg(&output).status().unwrap();
-        assert!(status.success(), "MediaX returned {status}");
+        let child = Command::new("target/release/kanali.exe").arg("--encode-mediax")
+            .arg(&source).arg(&output).output().unwrap();
+        assert!(child.status.success(), "MediaX returned {}: {}", child.status, String::from_utf8_lossy(&child.stderr));
         assert_eq!(first_picture(&output).unwrap(), Some(0.0));
         let frames = ffmpeg().arg("-i").arg(&output)
             .args(["-vf", "fps=2,scale=64:32,format=gray","-f","rawvideo","-"])
