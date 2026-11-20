@@ -25,6 +25,7 @@ struct Shared {
     state: Mutex<State>,
     found: Mutex<Option<update::Found>>,
     refresh: AtomicBool,
+    reapply: AtomicBool,
     updating: AtomicBool,
 }
 
@@ -35,6 +36,7 @@ impl Shared {
             state: Mutex::new(state),
             found: Mutex::new(None),
             refresh: AtomicBool::new(false),
+            reapply: AtomicBool::new(false),
             updating: AtomicBool::new(false),
         }
     }
@@ -95,13 +97,17 @@ fn session(sh: &Arc<Shared>) -> Result<(), String> {
             c
         }
     };
+    let present = |name: &str| files.iter().any(|p| p.rsplit('/').next() == Some(name));
+    if cfg.playing == config::DOWNLOAD_46 && !present(&cfg.playing) && present(config::FACTORY_VIDEO) {
+        cfg.playing = config::FACTORY_VIDEO.into();
+        config::save(&config::config_path(), &cfg).map_err(|e| e.to_string())?;
+    }
     let initial = device::apply_play(&mut f, &cfg);
     sh.with(|s| {
         s.connected = true;
-        s.message = "Đã kết nối".into();
+        s.message = initial.err().unwrap_or_else(|| "Đã kết nối".into());
         s.info = Some(info);
         s.files = files;
-        if let Err(e) = initial { s.media_status = e; }
     });
 
     let request_path=config::data_dir().join("remove-request.json");
@@ -141,6 +147,7 @@ fn session(sh: &Arc<Shared>) -> Result<(), String> {
                 sh.with(|s| s.media_status = format!("Không gửi được {name}: {e}. Có thể chọn lại tệp nguồn."));
                 return Err(e);
             }
+            cfg = load_cfg();
             device::apply_play(&mut f,&cfg)?;
         }
         let refresh = sh.refresh.swap(false, Ordering::Relaxed);
@@ -149,7 +156,7 @@ fn session(sh: &Arc<Shared>) -> Result<(), String> {
             sh.with(|s| s.files = files);
         }
         if let Some(new) = config::load_opt::<Config>(&config::config_path()) {
-            if refresh || new.playing != cfg.playing
+            if sh.reapply.swap(false, Ordering::Relaxed) || refresh || new.playing != cfg.playing
                 || new.poweron != cfg.poweron
                 || new.standby != cfg.standby
                 || new.level != cfg.level || new.layout != cfg.layout
@@ -186,6 +193,7 @@ fn control(sh: Arc<Shared>) {
                 let s = sh.clone();
                 thread::spawn(move || do_update(&s));
             }
+            Some("apply") => sh.reapply.store(true, Ordering::Relaxed),
             Some("refresh") => sh.refresh.store(true, Ordering::Relaxed),
             _ => {}
         }

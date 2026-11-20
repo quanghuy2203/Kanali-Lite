@@ -321,7 +321,7 @@ impl App {
                         self.cfg.playing = self.carousel.clone();
                     }
                     match config::save(&config::config_path(), &self.cfg) {
-                        Ok(()) => { config::send_command("refresh"); self.media_note.clear(); },
+                        Ok(()) => { config::send_command("apply"); self.media_note.clear(); },
                         Err(e) => self.media_note = e.to_string(),
                     }
                 }
@@ -335,7 +335,7 @@ impl App {
                         self.carousel = recovered.playing.clone();
                         self.draft = recovered.layout.clone();
                         self.cfg = recovered;
-                        config::send_command("refresh");
+                        config::send_command("apply");
                         self.media_note.clear();
                     }
                     Err(e) => self.media_note = e.to_string(),
@@ -630,7 +630,7 @@ impl App {
                         self.media_job = Some(rx);
                         self.media_note = "Đang chuẩn bị wallpaper…".into();
                         std::thread::spawn(move || {
-                            let _ = tx.send(crate::media::import(path, project));
+                            let _ = tx.send(crate::media::import_wallpaper(path, project));
                         });
                     }
                 }

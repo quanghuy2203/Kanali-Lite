@@ -31,6 +31,11 @@ fn ffmpeg() -> Command {
         local
             .filter(|p| p.is_file())
             .or_else(|| {
+                std::env::split_paths(&std::env::var_os("PATH")?)
+                    .map(|dir| dir.join("ffmpeg.exe"))
+                    .find(|p| p.is_file())
+            })
+            .or_else(|| {
                 ["ProgramFiles", "ProgramFiles(x86)"]
                     .into_iter()
                     .filter_map(std::env::var_os)
@@ -61,11 +66,15 @@ fn run(cmd: &mut Command) -> Result<(), String> {
 }
 
 pub fn make_poster(source: &Path, name: &str) -> Result<(), String> {
+    make_poster_at(source, name, 0.0)
+}
+
+fn make_poster_at(source: &Path, name: &str, start: f64) -> Result<(), String> {
     let dir = dir("previews")?;
     let tmp = tempfile::NamedTempFile::new_in(dir)
         .map_err(|e| e.to_string())?
         .into_temp_path();
-    run(ffmpeg().arg("-i").arg(source).args(["-t","4","-frames:v","8","-vf","fps=2:round=up,scale=240:116:force_original_aspect_ratio=decrease,pad=240:116:(ow-iw)/2:(oh-ih)/2","-pix_fmt","rgb24","-f","rawvideo"]).arg(&*tmp))?;
+    run(ffmpeg().arg("-i").arg(source).args(["-ss", &start.to_string(), "-t","4","-frames:v","8","-vf","fps=2:round=up,scale=240:116:force_original_aspect_ratio=decrease,pad=240:116:(ow-iw)/2:(oh-ih)/2","-pix_fmt","rgb24","-f","rawvideo"]).arg(&*tmp))?;
     let len = fs::metadata(&tmp).map_err(|e| e.to_string())?.len();
     if len == 0 || len > 8 * 240 * 116 * 3 || len % (240 * 116 * 3) != 0 {
         return Err("Không đọc được hình xem trước".into());
@@ -167,47 +176,128 @@ fn start_engine() -> Result<PathBuf, String> {
     Err("Đã yêu cầu Steam mở Wallpaper Engine. Kiểm tra trạng thái khởi động trong Steam rồi kết nối lại.".into())
 }
 
-const ENCODE: &[&str]=&["-an","-pix_fmt","yuv420p","-c:v","libx264","-threads","2","-preset","veryfast","-crf","23","-f","h264"];
+const ENCODE: &[&str] = &[
+    "-an", "-pix_fmt", "yuv420p", "-c:v", "libx264", "-threads", "2", "-preset", "veryfast",
+    "-crf", "23", "-f", "h264",
+];
 const SCALE: &str="fps=24,scale=2240:1080:force_original_aspect_ratio=decrease,pad=2240:1080:(ow-iw)/2:(oh-ih)/2,setsar=1";
 
-fn contains_picture(samples:&[u8])->bool {
-    samples.chunks_exact(64*32).any(|frame|frame.iter().filter(|&&v|v>12).take(5).count()>=5)
+fn contains_picture(samples: &[u8]) -> bool {
+    samples
+        .chunks_exact(64 * 32)
+        .any(|frame| frame.iter().filter(|&&v| v > 12).take(5).count() >= 5)
 }
 
-fn capture_scene(w:&Wallpaper,target:&Path)->Result<(),String>{
-    let mut errors=Vec::new();
-    for gpu in [true,false] {
-        let mut cmd=ffmpeg();
+// Read one thumbnail at a time and stop decoding after the first visible sample.
+fn first_picture(path: &Path) -> Result<Option<f64>, String> {
+    use std::io::{ErrorKind, Read};
+    use std::process::Stdio;
+    let mut child = ffmpeg()
+        .args(["-threads", "2", "-f", "h264", "-i"])
+        .arg(path)
+        .args([
+            "-vf",
+            r"select=not(mod(n\,12)),scale=64:32,format=gray",
+            "-vsync",
+            "vfr",
+            "-f",
+            "rawvideo",
+            "-",
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    let mut stream = child.stdout.take().unwrap();
+    let mut frame = [0; 64 * 32];
+    let mut seconds = 0.0;
+    let result = loop {
+        match stream.read_exact(&mut frame) {
+            Ok(()) if contains_picture(&frame) => break Ok(Some(seconds)),
+            Ok(()) => seconds += 0.5,
+            Err(e) if e.kind() == ErrorKind::UnexpectedEof => break Ok(None),
+            Err(e) => break Err(e.to_string()),
+        }
+    };
+    drop(stream);
+    if !matches!(result, Ok(None)) {
+        let _ = child.kill();
+    }
+    let status = child.wait().map_err(|e| e.to_string())?;
+    if !status.success() && matches!(result, Ok(None)) {
+        return Err("Không giải mã được clip đã chuyển đổi".into());
+    }
+    result
+}
+
+fn capture_scene(w: &Wallpaper, target: &Path) -> Result<f64, String> {
+    let mut errors = Vec::new();
+    for gpu in [true, false] {
+        let mut cmd = ffmpeg();
         if gpu {
             // Match only our pop-out window, including when another app covers it.
             cmd.args(["-filter_complex",&format!("gfxcapture=window_title=^{}$:capture_cursor=0:max_framerate=24,hwdownload,format=bgra,{SCALE}[video]",w.window),"-map","[video]"]);
-        }else{
-            cmd.args(["-f","gdigrab","-framerate","24","-draw_mouse","0","-i",&format!("title={}",w.window),"-vf",SCALE]);
+        } else {
+            cmd.args([
+                "-f",
+                "gdigrab",
+                "-framerate",
+                "24",
+                "-draw_mouse",
+                "0",
+                "-i",
+                &format!("title={}", w.window),
+                "-vf",
+                SCALE,
+            ]);
         }
         // Wall-clock limit also covers capture sources that stop delivering frames.
-        let log=tempfile::tempfile().map_err(|e|e.to_string())?;
-        let mut child=cmd.args(["-t","15"]).args(ENCODE).arg(target)
-            .stderr(log.try_clone().map_err(|e|e.to_string())?).spawn().map_err(|e|format!("Không mở được FFmpeg: {e}"))?;
-        let start=std::time::Instant::now();
-        let success=loop {
-            if let Some(status)=child.try_wait().map_err(|e|e.to_string())? {break status.success();}
-            if start.elapsed()>Duration::from_secs(60){let _=child.kill();let _=child.wait();break false;}
+        let log = tempfile::tempfile().map_err(|e| e.to_string())?;
+        let mut child = cmd
+            .args(["-t", "15"])
+            .args(ENCODE)
+            .arg(target)
+            .stderr(log.try_clone().map_err(|e| e.to_string())?)
+            .spawn()
+            .map_err(|e| format!("Không mở được FFmpeg: {e}"))?;
+        let start = std::time::Instant::now();
+        let success = loop {
+            if let Some(status) = child.try_wait().map_err(|e| e.to_string())? {
+                break status.success();
+            }
+            if start.elapsed() > Duration::from_secs(60) {
+                let _ = child.kill();
+                let _ = child.wait();
+                break false;
+            }
             thread::sleep(Duration::from_millis(150));
         };
         if success {
-            let out=ffmpeg().arg("-i").arg(target).args(["-vf","fps=2,scale=64:32,format=gray","-frames:v","30","-f","rawvideo","-"]).output().map_err(|e|e.to_string())?;
-            if out.status.success() && contains_picture(&out.stdout){return Ok(());}
+            if let Some(start) = first_picture(target)? {
+                return Ok(start);
+            }
             errors.push("chỉ thu được khung đen".into());
-        }else{
-            use std::io::{Read,Seek};
-            let mut log=log;let _=log.rewind();let mut detail=String::new();let _=log.take(450).read_to_string(&mut detail);
+        } else {
+            use std::io::{Read, Seek};
+            let mut log = log;
+            let _ = log.rewind();
+            let mut detail = String::new();
+            let _ = log.take(450).read_to_string(&mut detail);
             errors.push(detail);
         }
     }
     Err(format!("Không thu được hình của Wallpaper Engine. Giữ cửa sổ wallpaper mở và dùng FFmpeg có bộ lọc gfxcapture. Đã hủy nhập. {}",errors.join(" / ")))
 }
 
+pub fn import_wallpaper(source: PathBuf, project: bool) -> Result<String, String> {
+    import_media(source, project, true)
+}
+
 pub fn import(source: PathBuf, project: bool) -> Result<String, String> {
+    import_media(source, project, project)
+}
+
+fn import_media(source: PathBuf, project: bool, wallpaper: bool) -> Result<String, String> {
     let mut input = source.clone();
     let mut capture = None;
     let mut label = source
@@ -254,7 +344,7 @@ pub fn import(source: PathBuf, project: bool) -> Result<String, String> {
                 let window = format!("Kanali-Panorama-{}", config::now_ms());
                 let result = Command::new(&engine)
                     .args(["-control", "openWallpaper", "-file"])
-                    .arg(&input)
+                    .arg(if json["type"].as_str().is_some_and(|t| t.eq_ignore_ascii_case("scene")) { &source } else { &input })
                     .args(["-playInWindow", &window, "-width", "1120", "-height", "540"])
                     .creation_flags(0x08000000)
                     .status()
@@ -272,11 +362,16 @@ pub fn import(source: PathBuf, project: bool) -> Result<String, String> {
     let temp = tempfile::NamedTempFile::new_in(&queue)
         .map_err(|e| e.to_string())?
         .into_temp_path();
-    if let Some(w)=&capture {
-        capture_scene(w,&temp)?;
-    }else{
-        run(ffmpeg().arg("-i").arg(&input).args(["-vf",SCALE]).args(ENCODE).arg(&*temp))?;
-    }
+    let preview_start = if let Some(w) = &capture {
+        capture_scene(w, &temp)?
+    } else {
+        run(ffmpeg().arg("-i").arg(&input).args(["-vf", SCALE]).args(ENCODE).arg(&*temp))?;
+        if wallpaper {
+            first_picture(&temp)?.ok_or("Wallpaper chỉ có khung đen. Đã hủy nhập.")?
+        } else {
+            0.0
+        }
+    };
     drop(capture);
     if !(1..=500_000_000).contains(&fs::metadata(&temp).map_err(|e| e.to_string())?.len()) {
         return Err("Video sau chuyển đổi phải dưới 500 MB".into());
@@ -287,7 +382,7 @@ pub fn import(source: PathBuf, project: bool) -> Result<String, String> {
         .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
         .collect();
     let name = format!("{slug}-{}.mp4.h264_2240x1080", config::now_ms());
-    make_poster(&temp, &name)?;
+    make_poster_at(&temp, &name, preview_start)?;
     temp.persist_noclobber(queue.join(&name))
         .map_err(|e| e.to_string())?;
     Ok(format!("Đã chuẩn bị {name}. Đang chờ truyền qua USB."))

@@ -165,7 +165,7 @@ impl Library {
                         .unwrap_or("wallpaper")
                 );
                 std::thread::spawn(move || {
-                    let _ = tx.send(super::media::import(path, true));
+                    let _ = tx.send(super::media::import_wallpaper(path, true));
                 });
             }
         }

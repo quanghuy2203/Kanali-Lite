@@ -40,7 +40,7 @@ Trong **Customization**, chọn Full Screen hoặc Screen Splitting. Với màn 
 
 Trong **Customization**, bấm **Mở thư viện Wallpaper Engine**. Cửa sổ riêng hiển thị ảnh bìa, tên và loại của từng dự án, có ô tìm kiếm và nút nhập. **Mở Wallpaper Engine để tải thêm** mở ứng dụng chính chủ. Khi tải xong, Lite tự cập nhật danh sách. Bật **Tự nhập wallpaper mới tải** để chuyển các mục mới vào hàng chờ USB khi cửa sổ còn mở. Web và Scene được ghi thành clip 15 giây, Video dùng tệp nguồn.
 
-Trong thư viện PANORAMA, bấm **Xóa** trên thẻ media đã thêm rồi xác nhận. Nếu tệp đang phát, Lite chuyển về Cooling delivery và đợi màn hình xác nhận trước khi xóa. Nút **Khôi phục màn hình** bật đèn nền và phát lại preset này ở chế độ toàn màn hình. Bạn cũng có thể xóa preset tải về `download_46` nếu thiết bị cho phép ghi. Khi nhập Web hoặc Scene, Lite kiểm tra hình thu được trước khi gửi qua USB và báo lỗi nếu clip chỉ có khung đen.
+Trong thư viện PANORAMA, bấm **Xóa** trên thẻ media đã thêm rồi xác nhận. Nếu tệp đang phát, Lite chuyển về Cooling delivery và đợi màn hình xác nhận trước khi xóa. Nút **Khôi phục màn hình** bật đèn nền và phát lại preset này ở chế độ toàn màn hình. Bạn cũng có thể xóa preset tải về `download_46` nếu thiết bị cho phép ghi. Khi nhập wallpaper, Lite kiểm tra clip đã chuyển đổi trước khi gửi qua USB. Nếu clip chỉ có khung đen, Lite hủy nhập. Với clip có đoạn mở đầu tối, ảnh xem trước bắt đầu từ khung lấy mẫu có hình.
 
 ## Dữ liệu
 Cấu hình và trạng thái nằm ở `%APPDATA%\kanali-rs\` (`config.json`, `state.json`). Nếu chương trình lỗi, xem `crash.log` trong thư mục đó.
