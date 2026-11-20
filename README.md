@@ -38,7 +38,7 @@ Trong **Customization**, chọn Full Screen hoặc Screen Splitting. Với màn 
 
 ### Thư viện Wallpaper Engine
 
-Trong **Customization**, bấm **Mở thư viện Wallpaper Engine**. Cửa sổ riêng hiển thị ảnh bìa, tên và loại của từng dự án, có ô tìm kiếm và nút nhập. **Mở Wallpaper Engine để tải thêm** mở ứng dụng chính chủ. Khi tải xong, Lite tự cập nhật danh sách. Bật **Tự nhập wallpaper mới tải** để chuyển các mục mới vào hàng chờ USB khi cửa sổ còn mở. Web và Scene được ghi thành clip 15 giây, Video dùng tệp nguồn.
+Trong **Customization**, bấm **Mở thư viện Wallpaper Engine**. Cửa sổ riêng hiển thị ảnh bìa, tên và loại của từng dự án, có ô tìm kiếm và nút nhập. **Mở Wallpaper Engine để tải thêm** mở ứng dụng chính chủ. Khi tải xong, Lite tự cập nhật danh sách. Bật **Tự nhập wallpaper mới tải** để chuyển các mục mới vào hàng chờ USB khi cửa sổ còn mở. Web và Scene được ghi từ cửa sổ Wallpaper Engine thành clip 15 giây, Video dùng tệp nguồn. Nếu bộ FFmpeg hiện tại không ghi được Scene, chọn **Cài công cụ ghi Scene**. Lite tải FFmpeg một lần (khoảng 105 MiB), kiểm tra SHA-256 rồi dùng bản này cho các lần nhập sau.
 
 Trong thư viện PANORAMA, bấm **Xóa** trên thẻ media đã thêm rồi xác nhận. Nếu tệp đang phát, Lite chuyển về Cooling delivery và đợi màn hình xác nhận trước khi xóa. Nút **Khôi phục màn hình** bật đèn nền và phát lại preset này ở chế độ toàn màn hình. Bạn cũng có thể xóa preset tải về `download_46` nếu thiết bị cho phép ghi. Khi nhập wallpaper, Lite kiểm tra clip đã chuyển đổi trước khi gửi qua USB. Nếu clip chỉ có khung đen, Lite hủy nhập. Với clip có đoạn mở đầu tối, ảnh xem trước bắt đầu từ khung lấy mẫu có hình.
 

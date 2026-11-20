@@ -60,7 +60,13 @@ fn main() {
             daemon::run(lock);
         }
         None => {
-            // Dịch vụ nền đã chạy: chỉ mở giao diện.
+            if !quiet && config::load_opt::<config::State>(&config::state_path())
+                .is_some_and(|s| !s.version.is_empty() && s.version != env!("CARGO_PKG_VERSION")) {
+                rfd::MessageDialog::new().set_title("Đang chạy Kanali Lite phiên bản cũ")
+                    .set_description("Chọn Thoát trên biểu tượng Kanali Lite ở khay hệ thống, rồi mở lại bản mới để sử dụng các sửa lỗi USB.")
+                    .show();
+                return;
+            }
             if !quiet {
                 spawn_self("--ui");
             }

@@ -155,21 +155,51 @@ pub fn parse_info(replies: &[Vec<u8>]) -> DeviceInfo {
     info
 }
 
+struct CatalogEntry {
+    path: String,
+    kind: u32,
+    writable: bool,
+}
+
+fn catalog_entries(body: &[u8]) -> Result<Vec<CatalogEntry>, String> {
+    let mut entries = Vec::new();
+    for (kind, value) in proto::parse(body).ok_or("Thư viện USB không hợp lệ")? {
+        if !matches!(kind, 1 | 2) { continue; }
+        let proto::Val::Bytes(bytes) = value else { return Err("Sai kiểu mục thư viện".into()); };
+        let entry = proto::parse(bytes).ok_or("Không đọc được mục thư viện")?;
+        let mut path = proto::find_str(&entry, 1);
+        let ext = proto::find_str(&entry, 2);
+        if path.is_empty() || path.ends_with('/') || ext.contains(['/', '\\']) {
+            return Err("Tên media trong thư viện không hợp lệ".into());
+        }
+        if !ext.is_empty() {
+            let suffix = format!(".{}", ext.trim_start_matches('.'));
+            if !path.to_ascii_lowercase().ends_with(&suffix.to_ascii_lowercase()) { path.push_str(&suffix); }
+        }
+        if !path.contains('/') {
+            let folder = if kind == 1 { "media" } else { "preset" };
+            path = format!("/mnt/data/{folder}/{path}");
+        }
+        entries.push(CatalogEntry { path, kind, writable: proto::find_int(&entry,4).unwrap_or(0) == 0 });
+    }
+    Ok(entries)
+}
+
 pub fn fetch_files(f: &mut File) -> Result<Vec<String>, String> {
     let catalog = tracked_reply(f, 103, &proto::f_str(1, "N/A"), 503)?;
-    Ok(proto::find_paths(&catalog))
+    Ok(catalog_entries(&catalog)?.into_iter().map(|e| e.path).collect())
 }
 
 pub fn apply_play(f: &mut File, cfg: &Config) -> Result<(), String> {
     let request = proto::configured_play(&cfg.poweron, &cfg.standby, &cfg.playing, cfg.level, &cfg.layout);
-    let fields = proto::parse(&request).ok_or("Cấu hình phát không hợp lệ")?;
-    tracked_reply(f, 200, proto::find_bytes(&fields, 200).ok_or("Thiếu cấu hình phát")?, 600)?;
+    // On 391A:1061 the captured KANALI sequence writes both messages back to back.
+    send(f, &request)?;
     send(f, &proto::overlay(&cfg.layout))?;
-    let readback = tracked_reply(f, 104, &[], 504)?;
-    if !matches_playback(&readback, cfg) {
-        return Err("PANORAMA chưa xác nhận video đã chọn. Hãy dùng Khôi phục màn hình.".into());
+    for delay in [100, 300, 700] {
+        thread::sleep(Duration::from_millis(delay));
+        if matches_playback(&tracked_reply(f, 104, &[], 504)?, cfg) { return Ok(()); }
     }
-    Ok(())
+    return Err("PANORAMA chưa xác nhận video đã chọn.".into());
 }
 
 fn matches_playback(body: &[u8], cfg: &Config) -> bool {
@@ -244,11 +274,11 @@ fn tracked_reply(f: &mut File, field: u32, body: &[u8], expected: u32) -> Result
     for _ in 0..16 {
         let raw = read_frame(f)?;
         let fields = proto::parse(&raw).ok_or("Phản hồi USB không hợp lệ")?;
-        if proto::find_bytes(&fields, 1)
+        let reply_id = proto::find_bytes(&fields, 1)
             .and_then(proto::parse)
             .and_then(|h| proto::find_int(&h, 2))
-            != Some(id)
-        {
+            .unwrap_or(0);
+        if reply_id != 0 && reply_id != id {
             continue;
         }
         if let Some(err) = proto::find_bytes(&fields, 2).and_then(proto::parse) {
@@ -268,30 +298,15 @@ fn removal_type(catalog: &[u8], path: &str) -> Option<&'static str> {
     if name.is_empty() {
         return None;
     }
-    let fields = proto::parse(catalog)?;
-    let mut allowed = None;
-    let mut count = 0;
-    for (kind, val) in fields {
-        if let proto::Val::Bytes(bytes) = val {
-            if let Some(entry) = proto::parse(bytes) {
-                let file = proto::find_str(&entry, 1);
-                if file.rsplit('/').next() == Some(name) {
-                    count += 1;
-                    let user_media = kind == 1 && dir.ends_with("/media");
-                    let downloaded = kind == 2 && name == crate::config::DOWNLOAD_46;
-                    if file == path && proto::find_int(&entry, 4).unwrap_or(0) == 0 {
-                        if user_media {
-                            allowed = Some("media");
-                        }
-                        if downloaded {
-                            allowed = Some("preset");
-                        }
-                    }
-                }
-            }
-        }
+    let entries = catalog_entries(catalog).ok()?;
+    let mut matches = entries.iter().filter(|e| e.path.rsplit('/').next() == Some(name));
+    let entry = matches.next()?;
+    if matches.next().is_some() || entry.path != path || !entry.writable { return None; }
+    match entry.kind {
+        1 if dir.ends_with("/media") || dir.ends_with("/user") => Some("media"),
+        2 if name == crate::config::DOWNLOAD_46 => Some("preset"),
+        _ => None,
     }
-    allowed.filter(|_| count == 1)
 }
 
 pub fn remove_media(f: &mut File, path: &str, cfg: &Config) -> Result<Vec<String>, String> {
@@ -323,32 +338,32 @@ pub fn remove_media(f: &mut File, path: &str, cfg: &Config) -> Result<Vec<String
         next.layout.right.clear();
     }
     if next != *cfg
-        && !proto::find_paths(&catalog)
+        && !catalog_entries(&catalog)?
             .iter()
-            .any(|p| p.rsplit('/').next() == Some(next.playing.as_str()))
+            .any(|e| e.path.rsplit('/').next() == Some(next.playing.as_str()))
     {
         return Err("Thiếu video thay thế trong thư viện PANORAMA.".into());
     }
-    // The draft on disk may differ from what the device is actually playing.
-    apply_play(f, &next)?;
-    if next != *cfg {
+    let actual = tracked_reply(f, 104, &[], 504)?;
+    let actual = proto::parse(&actual).ok_or("Không đọc được cấu hình PANORAMA")?;
+    let in_use = [(1,1), (2,2), (3,3), (3,4), (3,5), (3,6)].iter().any(|&(group, field)| {
+        proto::find_bytes(&actual, group).and_then(proto::parse).is_some_and(|m| {
+            proto::find_str(&m, field).rsplit('/').next() == Some(name)
+        })
+    });
+    if in_use || next != *cfg {
+        apply_play(f, &next)?;
         crate::config::save(&crate::config::config_path(), &next).map_err(|e| e.to_string())?;
     }
-    tracked_reply(
-        f,
-        403,
-        &[proto::f_str(1, name), proto::f_str(2, file_type)].concat(),
-        600,
-    )?;
-    let catalog = tracked_reply(f, 103, &proto::f_str(1, "N/A"), 503)?;
-    if proto::parse(&catalog).is_none() {
-        return Err("Chưa xác minh được thư viện sau khi xóa".into());
+    let removal = [proto::f_str(1, name), proto::f_str(2, file_type)].concat();
+    send(f, &[proto::f_bytes(1, &[]), proto::f_bytes(403, &removal)].concat())?;
+    // Some firmware sends no ACK for FileRemove. Reconcile without reissuing it.
+    for delay in [300, 600, 1500] {
+        thread::sleep(Duration::from_millis(delay));
+        let files = fetch_files(f)?;
+        if !files.iter().any(|p| p == path) { return Ok(files); }
     }
-    let files = proto::find_paths(&catalog);
-    if files.iter().any(|p| p == path) {
-        return Err("Thiết bị vẫn còn tệp sau khi xóa".into());
-    }
-    Ok(files)
+    Err(format!("PANORAMA vẫn báo còn {name} sau lệnh xóa"))
 }
 
 #[cfg(test)]
@@ -384,6 +399,16 @@ mod removal_tests {
                 &[proto::f_str(1, &path), proto::f_varint(4, readonly)].concat(),
             );
             assert_eq!(removal_type(&entry, &path), expected);
+        }
+    }
+
+    #[test]
+    fn catalog_joins_separate_extension_once_for_play_and_delete() {
+        for base in ["/userdata/user/test.mp4", "/userdata/user/test.mp4.h264_2240x1080"] {
+            let full = "/userdata/user/test.mp4.h264_2240x1080";
+            let body = proto::f_bytes(1, &[proto::f_str(1, base), proto::f_str(2, ".h264_2240x1080")].concat());
+            assert_eq!(catalog_entries(&body).unwrap()[0].path, full);
+            assert_eq!(removal_type(&body, full), Some("media"));
         }
     }
 

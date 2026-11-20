@@ -23,13 +23,52 @@ pub fn poster(name: &str) -> PathBuf {
         .join(format!("{:x}.rgb", Sha256::digest(name.as_bytes())))
 }
 
+const CAPTURE_URL: &str = "https://github.com/GyanD/codexffmpeg/releases/download/8.1.1/ffmpeg-8.1.1-essentials_build.zip";
+const CAPTURE_SHA256: &str = "6f58ce889f59c311410f7d2b18895b33c03456463486f3b1ebc93d97a0f54541";
+
+fn capture_tool() -> PathBuf {
+    config::data_dir().join("tools/ffmpeg-8.1.1.exe")
+}
+
+pub fn install_capture_tool() -> Result<String, String> {
+    use std::io::{Read, Seek, Write};
+    let target = capture_tool();
+    let folder = dir("tools")?;
+    if !target.exists() {
+        let response = ureq::get(CAPTURE_URL).timeout(Duration::from_secs(180)).call().map_err(|e| e.to_string())?;
+        let mut reader = response.into_reader().take(150_000_000);
+        let mut archive = tempfile::tempfile_in(&folder).map_err(|e| e.to_string())?;
+        let mut hash = Sha256::new();
+        let mut buf = [0; 65536];
+        loop {
+            let n = reader.read(&mut buf).map_err(|e| e.to_string())?;
+            if n == 0 { break; }
+            archive.write_all(&buf[..n]).map_err(|e| e.to_string())?;
+            hash.update(&buf[..n]);
+        }
+        if format!("{:x}", hash.finalize()) != CAPTURE_SHA256 { return Err("Tải FFmpeg không đầy đủ hoặc sai SHA-256".into()); }
+        archive.rewind().map_err(|e| e.to_string())?;
+        let mut zip = zip::ZipArchive::new(archive).map_err(|e| e.to_string())?;
+        let name = zip.file_names().find(|n| n.ends_with("/bin/ffmpeg.exe")).ok_or("Thiếu ffmpeg.exe")?.to_owned();
+        let mut entry = zip.by_name(&name).map_err(|e| e.to_string())?;
+        let mut tmp = tempfile::NamedTempFile::new_in(folder).map_err(|e| e.to_string())?;
+        std::io::copy(&mut entry, &mut tmp).map_err(|e| e.to_string())?;
+        if let Err(e) = tmp.persist_noclobber(&target) {
+            if !target.is_file() { return Err(e.to_string()); }
+        }
+    }
+    let out = ffmpeg().args(["-filters"]).output().map_err(|e| e.to_string())?;
+    if !out.status.success() || !String::from_utf8_lossy(&out.stdout).contains("gfxcapture") { return Err("FFmpeg thiếu bộ lọc gfxcapture".into()); }
+    Ok("Đã sẵn sàng ghi Scene. Chọn Nhập trên Scene cần dùng.".into())
+}
+
 fn ffmpeg() -> Command {
     let local = std::env::current_exe()
         .ok()
         .and_then(|p| p.parent().map(|d| d.join("ffmpeg.exe")));
     let mut cmd = Command::new(
-        local
-            .filter(|p| p.is_file())
+        Some(capture_tool()).filter(|p| p.is_file())
+            .or_else(|| local.filter(|p| p.is_file()))
             .or_else(|| {
                 std::env::split_paths(&std::env::var_os("PATH")?)
                     .map(|dir| dir.join("ffmpeg.exe"))
@@ -178,9 +217,9 @@ fn start_engine() -> Result<PathBuf, String> {
 
 const ENCODE: &[&str] = &[
     "-an", "-pix_fmt", "yuv420p", "-c:v", "libx264", "-threads", "2", "-preset", "veryfast",
-    "-crf", "23", "-f", "h264",
+    "-profile:v", "high", "-crf", "23", "-maxrate", "12M", "-bufsize", "24M", "-g", "30", "-f", "h264",
 ];
-const SCALE: &str="fps=24,scale=2240:1080:force_original_aspect_ratio=decrease,pad=2240:1080:(ow-iw)/2:(oh-ih)/2,setsar=1";
+const SCALE: &str="fps=30,scale=2240:1080:force_original_aspect_ratio=decrease,pad=2240:1080:(ow-iw)/2:(oh-ih)/2,setsar=1";
 
 fn contains_picture(samples: &[u8]) -> bool {
     samples
@@ -197,7 +236,7 @@ fn first_picture(path: &Path) -> Result<Option<f64>, String> {
         .arg(path)
         .args([
             "-vf",
-            r"select=not(mod(n\,12)),scale=64:32,format=gray",
+            r"select=not(mod(n\,15)),scale=64:32,format=gray",
             "-vsync",
             "vfr",
             "-f",
@@ -236,13 +275,13 @@ fn capture_scene(w: &Wallpaper, target: &Path) -> Result<f64, String> {
         let mut cmd = ffmpeg();
         if gpu {
             // Match only our pop-out window, including when another app covers it.
-            cmd.args(["-filter_complex",&format!("gfxcapture=window_title=^{}$:capture_cursor=0:max_framerate=24,hwdownload,format=bgra,{SCALE}[video]",w.window),"-map","[video]"]);
+            cmd.args(["-filter_complex",&format!("gfxcapture=window_title=^{}$:capture_cursor=0:max_framerate=30,hwdownload,format=bgra,{SCALE}[video]",w.window),"-map","[video]"]);
         } else {
             cmd.args([
                 "-f",
                 "gdigrab",
                 "-framerate",
-                "24",
+                "30",
                 "-draw_mouse",
                 "0",
                 "-i",
@@ -286,7 +325,7 @@ fn capture_scene(w: &Wallpaper, target: &Path) -> Result<f64, String> {
             errors.push(detail);
         }
     }
-    Err(format!("Không thu được hình của Wallpaper Engine. Giữ cửa sổ wallpaper mở và dùng FFmpeg có bộ lọc gfxcapture. Đã hủy nhập. {}",errors.join(" / ")))
+    Err(format!("Không thu được hình của Wallpaper Engine. Trong thư viện, bấm Cài công cụ ghi Scene rồi nhập lại và giữ cửa sổ wallpaper mở. Đã hủy nhập. {}",errors.join(" / ")))
 }
 
 pub fn import_wallpaper(source: PathBuf, project: bool) -> Result<String, String> {
@@ -314,38 +353,26 @@ fn import_media(source: PathBuf, project: bool, wallpaper: bool) -> Result<Strin
             .ok_or("Thiếu thư mục dự án")?
             .canonicalize()
             .map_err(|e| e.to_string())?;
-        let relative = json["file"].as_str().ok_or("Dự án thiếu trường file")?;
-        let mut entry = root.join(relative);
-        if !entry.exists()
-            && json["type"]
-                .as_str()
-                .is_some_and(|t| t.eq_ignore_ascii_case("web") || t.eq_ignore_ascii_case("scene"))
-        {
-            entry = root.join("scene.pkg");
-        }
-        input = entry
-            .canonicalize()
-            .map_err(|e| format!("Thiếu tệp dự án: {e}"))?;
-        if !input.starts_with(&root) {
-            return Err("Tệp nằm ngoài thư mục dự án".into());
+        let kind = json["type"].as_str().unwrap_or("").to_ascii_lowercase();
+        // A Scene's logical scene.json may only exist inside scene.pkg.
+        // Wallpaper Engine resolves those internal resources from project.json itself.
+        if kind == "video" {
+            let entry = root.join(json["file"].as_str().ok_or("Video thiếu trường file")?);
+            input = entry.canonicalize().map_err(|e| format!("Thiếu video nguồn: {e}"))?;
+            if !input.starts_with(&root) { return Err("Tệp nằm ngoài thư mục dự án".into()); }
         }
         if let Some(title) = json["title"].as_str() {
             label = title.into();
         }
-        match json["type"]
-            .as_str()
-            .unwrap_or("")
-            .to_ascii_lowercase()
-            .as_str()
-        {
+        match kind.as_str() {
             "video" => (),
             "scene" | "web" => {
                 let engine = start_engine()?;
                 let window = format!("Kanali-Panorama-{}", config::now_ms());
                 let result = Command::new(&engine)
                     .args(["-control", "openWallpaper", "-file"])
-                    .arg(if json["type"].as_str().is_some_and(|t| t.eq_ignore_ascii_case("scene")) { &source } else { &input })
-                    .args(["-playInWindow", &window, "-width", "1120", "-height", "540"])
+                    .arg(&source)
+                    .args(["-playInWindow", &window, "-width", "1120", "-height", "540", "-activate", "-borderless"])
                     .creation_flags(0x08000000)
                     .status()
                     .map_err(|e| e.to_string())?;
@@ -353,7 +380,16 @@ fn import_media(source: PathBuf, project: bool, wallpaper: bool) -> Result<Strin
                     return Err("Wallpaper Engine không mở được dự án".into());
                 }
                 capture = Some(Wallpaper { engine, window });
-                thread::sleep(Duration::from_secs(3));
+                use windows::{core::HSTRING, Win32::UI::WindowsAndMessaging::FindWindowW};
+                let title = HSTRING::from(capture.as_ref().unwrap().window.as_str());
+                let start = std::time::Instant::now();
+                while unsafe { FindWindowW(None, &title) }.is_err() {
+                    if start.elapsed() > Duration::from_secs(20) {
+                        return Err("Wallpaper Engine chưa mở cửa sổ Scene sau 20 giây".into());
+                    }
+                    thread::sleep(Duration::from_millis(200));
+                }
+                thread::sleep(Duration::from_secs(1));
             }
             _ => return Err("Chỉ hỗ trợ dự án Video, Web và Scene".into()),
         }
@@ -484,6 +520,18 @@ pub fn active_wallpaper(monitor: u32) -> Result<ActiveWallpaper, String> {
 #[cfg(test)]
 mod capture_tests {
     use super::*;
+    #[test]
+    #[ignore = "downloads the pinned Windows FFmpeg distribution"]
+    fn windows_capture_tool_encodes_visible_device_clip() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::env::set_var("APPDATA", tmp.path());
+        install_capture_tool().unwrap();
+        let clip = tmp.path().join("device.h264");
+        run(ffmpeg().args(["-f","lavfi","-i","testsrc2=size=320x180:duration=1","-vf", SCALE])
+            .args(ENCODE).arg(&clip)).unwrap();
+        assert_eq!(first_picture(&clip).unwrap(), Some(0.0));
+        make_poster(&clip, "test.mp4").unwrap();
+    }
     #[test]
     fn rejects_black_but_accepts_dark_scene_after_fade() {
         let mut samples=vec![0;64*32*3];

@@ -426,7 +426,7 @@ impl App {
                 .state
                 .files
                 .iter()
-                .filter(|p| !p.contains("/media/"))
+                .filter(|p| !p.contains("/media/") && !p.contains("/user/"))
                 .map(|p| file_of(p).to_owned())
                 .collect();
             presets.sort_by_key(|p| (crate::presets::title(p).is_none(), p.clone()));
@@ -499,8 +499,8 @@ impl App {
                             let width =
                                 (ui.available_width() - 8. * (cols - 1) as f32) / cols as f32;
                             for file in files.iter().skip(row * cols).take(cols) {
-                                let (rect, response) =
-                                    ui.allocate_exact_size(vec2(width, 142.), Sense::click());
+                                let (rect, _) = ui.allocate_exact_size(vec2(width, 142.), Sense::hover());
+                                let mut select_box = rect;
                                 let active = if !self.draft.split {
                                     file == &self.full
                                 } else if self.right_slot {
@@ -519,13 +519,14 @@ impl App {
                                 visible.push(file.clone());
                                 if let Some(path) = self.state.files.iter().find(|p| {
                                     p.rsplit_once('/').is_some_and(|(dir, n)| {
-                                        (dir.ends_with("/media") || n == config::DOWNLOAD_46) && n == file
+                                        (dir.ends_with("/media") || dir.ends_with("/user") || n == config::DOWNLOAD_46) && n == file
                                     })
                                 }) {
                                     let delete_box = Rect::from_min_size(
                                         rect.right_bottom() - vec2(69., 36.),
                                         vec2(63., 30.),
                                     );
+                                    select_box.max.y = delete_box.min.y;
                                     let delete = ui.interact(
                                         delete_box,
                                         ui.id().with(("delete", file)),
@@ -572,7 +573,8 @@ impl App {
                                         }
                                     }
                                 }
-                                if response.on_hover_text(file).clicked() {
+                                let select = ui.interact(select_box, ui.id().with(("select", file)), Sense::click());
+                                if select.on_hover_text(file).clicked() {
                                     let slot = if !self.draft.split {
                                         &mut self.full
                                     } else if self.right_slot {

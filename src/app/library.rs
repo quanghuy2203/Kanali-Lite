@@ -218,6 +218,12 @@ impl eframe::App for Library {
                         Err(e) => self.note = e,
                     }
                 }
+                if ui.add_enabled(self.job.is_none(), egui::Button::new("Cài công cụ ghi Scene")).on_hover_text("Tải FFmpeg cho Windows một lần từ GitHub").clicked() {
+                    let (tx, rx) = mpsc::channel();
+                    self.job = Some(rx);
+                    self.note = "Đang tải và kiểm tra FFmpeg…".into();
+                    std::thread::spawn(move || { let _ = tx.send(super::media::install_capture_tool()); });
+                }
                 ui.add_enabled(
                     self.seen.is_some(),
                     egui::Checkbox::new(&mut self.auto, "Tự nhập wallpaper mới tải"),
