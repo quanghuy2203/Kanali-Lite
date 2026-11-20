@@ -103,6 +103,7 @@ fn session(sh: &Arc<Shared>) -> Result<(), String> {
         config::save(&config::config_path(), &cfg).map_err(|e| e.to_string())?;
     }
     let initial = device::apply_play(&mut f, &cfg);
+    let mut applied_layout = initial.as_ref().ok().map(|_| cfg.layout.clone());
     sh.with(|s| {
         s.connected = true;
         s.message = initial.err().unwrap_or_else(|| "Đã kết nối".into());
@@ -158,15 +159,18 @@ fn session(sh: &Arc<Shared>) -> Result<(), String> {
                 || new.level != cfg.level || new.layout != cfg.layout
             {
                 match device::apply_play(&mut f, &new) {
-                    Ok(()) => sh.with(|s| s.message = format!("PANORAMA đã nhận cấu hình phát {}", new.playing)),
-                    Err(e) => sh.with(|s| s.message = e),
+                    Ok(()) => {
+                        applied_layout = Some(new.layout.clone());
+                        sh.with(|s| s.message = format!("PANORAMA đã nhận cấu hình phát {}", new.playing));
+                    }
+                    Err(e) => { applied_layout = None; sh.with(|s| s.message = e); }
                 }
             }
             cfg = new;
         }
         if last_hb.elapsed() >= Duration::from_secs(2) {
             device::heartbeat(&mut f)?;
-            sampler.publish(&mut f,&cfg.layout)?;
+            if let Some(layout) = &applied_layout { sampler.publish(&mut f,layout)?; }
             last_hb = Instant::now();
         }
     }

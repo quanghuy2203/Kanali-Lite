@@ -182,41 +182,64 @@ pub enum Val<'a> {
     Other,
 }
 
+fn next_field<'a>(b: &'a [u8], i: &mut usize) -> Option<(u32, Val<'a>)> {
+    let k = varint(b, i)?;
+    let field = u32::try_from(k >> 3).ok()?;
+    if field == 0 { return None; }
+    let value = match k & 7 {
+        0 => Val::Int(varint(b, i)?),
+        wire @ (1 | 2 | 5) => {
+            let len = match wire { 1 => 8, 5 => 4, _ => usize::try_from(varint(b, i)?).ok()? };
+            let end = i.checked_add(len)?;
+            let data = b.get(*i..end)?;
+            *i = end;
+            if wire == 2 { Val::Bytes(data) } else { Val::Other }
+        }
+        _ => return None,
+    };
+    Some((field, value))
+}
+
 pub fn parse(b: &[u8]) -> Option<Vec<(u32, Val<'_>)>> {
     let mut i = 0;
     let mut out = Vec::new();
-    while i < b.len() {
-        let k = varint(b, &mut i)?;
-        let f = (k >> 3) as u32;
-        match k & 7 {
-            0 => out.push((f, Val::Int(varint(b, &mut i)?))),
-            2 => {
-                let l = varint(b, &mut i)? as usize;
-                let end = i.checked_add(l)?;
-                if end > b.len() {
-                    return None;
-                }
-                out.push((f, Val::Bytes(&b[i..end])));
-                i = end;
-            }
-            1 => {
-                if i + 8 > b.len() {
-                    return None;
-                }
-                out.push((f, Val::Other));
-                i += 8;
-            }
-            5 => {
-                if i + 4 > b.len() {
-                    return None;
-                }
-                out.push((f, Val::Other));
-                i += 4;
-            }
-            _ => return None,
-        }
-    }
+    while i < b.len() { out.push(next_field(b, &mut i)?); }
     Some(out)
+}
+
+fn replace_fields(old: &[u8], keys: &[u32], additions: &[u8]) -> Option<Vec<u8>> {
+    let mut merged = Vec::with_capacity(old.len() + additions.len());
+    let mut i = 0;
+    while i < old.len() {
+        let start = i;
+        let (field, _) = next_field(old, &mut i)?;
+        if !keys.contains(&field) { merged.extend_from_slice(&old[start..i]); }
+    }
+    merged.extend_from_slice(additions);
+    Some(merged)
+}
+
+/// Keep the device's filter, rotation and firmware-specific settings across a media switch.
+pub fn update_playback_config(old: &[u8], cfg: &crate::config::Config) -> Option<Vec<u8>> {
+    let fields = parse(old)?;
+    let mut work = cat(&[f_varint(1, cfg.layout.split as u64),
+        f_varint(2, if cfg.layout.split { 0 } else { cfg.layout.loop_mode.min(2) })]);
+    if cfg.layout.split {
+        work.extend(cat(&[f_str(4, &cfg.layout.left), f_str(5, &cfg.layout.right)]));
+    } else {
+        work.extend(f_str(3, &cfg.playing));
+    }
+    let mut changes = Vec::new();
+    for (group, keys, values) in [
+        (1, &[1][..], f_str(1, &cfg.poweron)),
+        (2, &[1, 2][..], cat(&[f_varint(1, 1), f_str(2, &cfg.standby)])),
+        (3, &[1, 2, 3, 4, 5, 6, 7][..], work),
+        (5, &[1, 2][..], cat(&[f_varint(1, cfg.layout.enabled as u64), f_varint(2, cfg.level)])),
+    ] {
+        let body = replace_fields(find_bytes(&fields, group).unwrap_or_default(), keys, &values)?;
+        changes.extend(f_bytes(group, &body));
+    }
+    replace_fields(old, &[1,2,3,5], &changes)
 }
 
 pub fn find_bytes<'a>(fields: &[(u32, Val<'a>)], n: u32) -> Option<&'a [u8]> {

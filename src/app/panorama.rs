@@ -318,6 +318,7 @@ impl App {
                         self.cfg.playing = self.full.clone();
                     } else {
                         self.cfg.layout.split = false;
+                        self.cfg.layout.loop_mode = 0;
                         self.cfg.playing = self.carousel.clone();
                     }
                     let repeat = config::load_opt::<config::Config>(&config::config_path()).as_ref() == Some(&self.cfg);
@@ -343,7 +344,15 @@ impl App {
                 }
             }
         });
-        ui.label(&self.state.message);
+        ui.horizontal_wrapped(|ui| {
+            ui.label(&self.state.message);
+            if ui.small_button("Chép chẩn đoán phát").clicked() {
+                if let Some(trace) = config::load_opt::<String>(&config::data_dir().join("last-playback.json")) {
+                    ui.ctx().copy_text(trace);
+                    self.media_note = "Đã chép chẩn đoán phát.".into();
+                } else { self.media_note = "Chưa có kết quả lệnh phát từ tản.".into(); }
+            }
+        });
         if !self.media_note.is_empty() {
             ui.label(&self.media_note);
         }

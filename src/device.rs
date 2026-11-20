@@ -208,20 +208,65 @@ pub fn verify_upload(f: &mut File, name: &str, expected_size: u64) -> Result<Vec
 }
 
 pub fn apply_play(f: &mut File, cfg: &Config) -> Result<(), String> {
-    let request = proto::configured_play(&cfg.poweron, &cfg.standby, &cfg.playing, cfg.level, &cfg.layout);
-    // On 391A:1061 the captured KANALI sequence writes both messages back to back.
-    send(f, &request)?;
-    send(f, &proto::overlay(&cfg.layout))?;
-    for delay in [100, 300, 700] {
-        thread::sleep(Duration::from_millis(delay));
-        if matches_playback(&tracked_reply(f, 104, &[], 504)?, cfg) { return Ok(()); }
+    let mut trace = format!("Kanali Lite {} · {} ms\nVideo: {} · split={} · metrics={:?}\n",
+        env!("CARGO_PKG_VERSION"), now_ms(), cfg.playing, cfg.layout.split, cfg.layout.metrics);
+    let mut pending = None;
+    let result = switch_video(cfg, &mut trace, |field, body| {
+        let id = send_tracked(f, field, body)?;
+        if field == 104 {
+            receive_reply(f, id, 504, pending)
+        } else {
+            pending = Some(id);
+            Ok(Vec::new())
+        }
+    });
+    if let Err(e) = &result { trace.push_str(e); }
+    let _ = crate::config::save(&crate::config::data_dir().join("last-playback.json"), &trace);
+    result
+}
+
+fn switch_video(cfg: &Config, trace: &mut String,
+    mut command: impl FnMut(u32, &[u8]) -> Result<Vec<u8>, String>) -> Result<(), String> {
+    let current = command(104, &[]).map_err(|e| format!("Đọc cấu hình trước khi lưu: {e}"))?;
+    trace.push_str(&format!("Trước khi lưu: {}\n", playback_summary(&current)));
+    let body = proto::update_playback_config(&current, cfg).ok_or("Cấu hình thiết bị không hợp lệ")?;
+    command(200, &body).map_err(|e| format!("Ghi cấu hình: {e}"))?;
+    // A query is a barrier even on firmware that omits the write acknowledgement.
+    let stored = command(104, &[]).map_err(|e| format!("Xác nhận cấu hình đã ghi: {e}"))?;
+    trace.push_str(&format!("Sau lệnh 200: {}\n", playback_summary(&stored)));
+    // Firmware may expose the new media only after it processes the run configuration.
+    let overlay = proto::overlay(&cfg.layout);
+    let fields = proto::parse(&overlay).ok_or("Lớp hiển thị không hợp lệ")?;
+    command(201, proto::find_bytes(&fields, 201).ok_or("Thiếu lớp hiển thị")?)
+        .map_err(|e| format!("Kích hoạt màn hình: {e}"))?;
+    for wait in [0, 150, 500] {
+        if wait != 0 { thread::sleep(Duration::from_millis(wait)); }
+        let after = command(104, &[]).map_err(|e| format!("Kiểm tra sau khi kích hoạt: {e}"))?;
+        trace.push_str(&format!("Sau lệnh 201: {}\n", playback_summary(&after)));
+        if matches_playback(&after, cfg) { return Ok(()); }
     }
-    return Err("PANORAMA chưa xác nhận video đã chọn.".into());
+    Err("Cấu hình tản trả về khác cấu hình đã chọn. Xem chẩn đoán phát.".into())
+}
+
+fn playback_summary(body: &[u8]) -> String {
+    let fields = proto::parse(body).unwrap_or_default();
+    let work = proto::find_bytes(&fields, 3).and_then(proto::parse).unwrap_or_default();
+    let display = proto::find_bytes(&fields, 5).and_then(proto::parse).unwrap_or_default();
+    format!("mode={} loop={} video={} left={} right={} backlight={} brightness={}",
+        proto::find_int(&work,1).unwrap_or(0),proto::find_int(&work,2).unwrap_or(0),
+        proto::find_str(&work,3),proto::find_str(&work,4),proto::find_str(&work,5),
+        proto::find_int(&display,1).unwrap_or(0),proto::find_int(&display,2).unwrap_or(0))
 }
 
 fn matches_playback(body: &[u8], cfg: &Config) -> bool {
-    let Some(work) = proto::parse(body).and_then(|fields| proto::find_bytes(&fields, 3))
-        .and_then(proto::parse) else { return false; };
+    let Some(fields) = proto::parse(body) else { return false; };
+    if let Some(display) = proto::find_bytes(&fields, 5).and_then(proto::parse) {
+        if (proto::find_int(&display, 1).unwrap_or(0) != 0) != cfg.layout.enabled
+            || proto::find_int(&display, 2).unwrap_or(0) != cfg.level { return false; }
+    }
+    let Some(work) = proto::find_bytes(&fields, 3).and_then(proto::parse) else { return false; };
+    let expected_loop = if cfg.layout.split { 0 } else { cfg.layout.loop_mode.min(2) };
+    if proto::find_int(&work, 2).unwrap_or(0) != expected_loop { return false; }
     let matches = |field, name: &str| proto::find_str(&work, field).rsplit('/').next() == Some(name);
     let split = proto::find_int(&work, 1).unwrap_or(0);
     if cfg.layout.split {
@@ -280,6 +325,11 @@ pub fn upload(f: &mut File, path: &std::path::Path, name: &str, mut progress: im
 }
 
 fn tracked_reply(f: &mut File, field: u32, body: &[u8], expected: u32) -> Result<Vec<u8>, String> {
+    let id = send_tracked(f, field, body)?;
+    receive_reply(f, id, expected, None)
+}
+
+fn send_tracked(f: &mut File, field: u32, body: &[u8]) -> Result<u64, String> {
     use std::sync::atomic::{AtomicU64, Ordering};
     static NEXT: AtomicU64 = AtomicU64::new(1);
     let id = NEXT.fetch_add(1, Ordering::Relaxed);
@@ -288,6 +338,10 @@ fn tracked_reply(f: &mut File, field: u32, body: &[u8], expected: u32) -> Result
         f,
         &[proto::f_bytes(1, &header), proto::f_bytes(field, body)].concat(),
     )?;
+    Ok(id)
+}
+
+fn receive_reply(f: &mut File, id: u64, expected: u32, pending: Option<u64>) -> Result<Vec<u8>, String> {
     for _ in 0..16 {
         let raw = read_frame(f)?;
         let fields = proto::parse(&raw).ok_or("Phản hồi USB không hợp lệ")?;
@@ -295,7 +349,7 @@ fn tracked_reply(f: &mut File, field: u32, body: &[u8], expected: u32) -> Result
             .and_then(proto::parse)
             .and_then(|h| proto::find_int(&h, 2))
             .unwrap_or(0);
-        if reply_id != 0 && reply_id != id {
+        if reply_id != 0 && reply_id != id && Some(reply_id) != pending {
             continue;
         }
         if let Some(err) = proto::find_bytes(&fields, 2).and_then(proto::parse) {
@@ -303,6 +357,7 @@ fn tracked_reply(f: &mut File, field: u32, body: &[u8], expected: u32) -> Result
                 return Err(format!("Thiết bị từ chối: {}", proto::find_str(&err, 2)));
             }
         }
+        if reply_id != 0 && reply_id != id { continue; }
         if let Some(body) = proto::find_bytes(&fields, expected) {
             return Ok(body.to_vec());
         }
@@ -427,6 +482,45 @@ mod removal_tests {
             assert_eq!(catalog_entries(&body).unwrap()[0].path, full);
             assert_eq!(removal_type(&body, full), Some("media"));
         }
+    }
+
+    #[test]
+    fn switch_waits_for_device_and_preserves_firmware_fields() {
+        let cfg = Config::default();
+        let old_display = [proto::f_varint(4, 90), proto::f_varint(18, 12)].concat();
+        let old = [proto::f_bytes(3, &proto::f_str(3, "old.mp4")),
+            proto::f_bytes(5, &old_display), proto::f_bytes(62, b"vendor")].concat();
+        let mut stages = Vec::new();
+        let mut stored = Vec::new();
+        switch_video(&cfg, &mut String::new(), |field, body| {
+            stages.push(field);
+            match field {
+                200 => {
+                    stored = body.to_vec();
+                    let top = proto::parse(body).unwrap();
+                    assert_eq!(proto::find_bytes(&top,62),Some(&b"vendor"[..]));
+                    let display = proto::parse(proto::find_bytes(&top,5).unwrap()).unwrap();
+                    assert_eq!(proto::find_int(&display,4),Some(90));
+                    assert_eq!(proto::find_int(&display,18),Some(12));
+                }
+                104 if stages.contains(&201) => return Ok(stored.clone()),
+                104 => return Ok(old.clone()),
+                _ => (),
+            }
+            Ok(Vec::new())
+        }).unwrap();
+        assert_eq!(stages, [104,200,104,201,104]);
+    }
+    #[test]
+    fn rejected_write_never_activates() {
+        let mut stages = Vec::new();
+        let result = switch_video(&Config::default(), &mut String::new(), |stage, _| {
+            stages.push(stage);
+            if stages.len() == 3 { return Err("device rejected".into()); }
+            Ok(Vec::new())
+        });
+        assert!(result.unwrap_err().contains("device rejected"));
+        assert_eq!(stages,[104,200,104]);
     }
 
     #[test]

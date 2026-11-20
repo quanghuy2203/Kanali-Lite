@@ -36,6 +36,8 @@ Preset có các thẻ xếp lớp. Dùng mũi tên để xem, bấm **Lưu vào 
 
 Trong **Customization**, chọn Full Screen hoặc Screen Splitting. Với màn hình chia đôi, bấm từng ô và chọn media cho bên đó trước khi lưu. Chế độ phát gồm Single, Loop và Shuffle. Lớp thông tin hỗ trợ CPU Usage, Memory Utilization và Date & Time, với màu chữ, cỡ chữ và căn lề. Các mục nhiệt độ, xung nhịp, công suất và GPU lấy từ cảm biến do LibreHardwareMonitor công bố qua WMI. Chọn tối đa ba mục; dấu gạch ngang nghĩa là chưa có số đo.
 
+Khi bấm **Lưu vào màn hình**, Lite đọc cấu hình hiện tại, cập nhật phần đã chọn, rồi gửi lệnh kích hoạt. Nút **Chép chẩn đoán phát** sao chép tên video, chế độ phát và trạng thái đèn nền mà firmware trả về ở từng bước. Nếu tản đứng hình, lấy chẩn đoán ngay sau lần bấm Lưu đó.
+
 ### Thư viện Wallpaper Engine
 
 Trong **Customization**, bấm **Mở thư viện Wallpaper Engine**. Cửa sổ riêng hiển thị ảnh bìa, tên và loại của từng dự án, có ô tìm kiếm và nút nhập. **Mở Wallpaper Engine để tải thêm** mở ứng dụng chính chủ. Khi tải xong, Lite tự cập nhật danh sách. Bật **Tự nhập wallpaper mới tải** để chuyển các mục mới vào hàng chờ USB khi cửa sổ còn mở. Web và Scene được ghi từ cửa sổ Wallpaper Engine chạy phía sau giao diện thành clip 15 giây, Video dùng tệp nguồn. Nếu bộ FFmpeg hiện tại không ghi được Scene, chọn **Cài công cụ ghi Scene**. Lite tải FFmpeg một lần (khoảng 105 MiB), kiểm tra SHA-256 rồi dùng bản này cho các lần nhập sau.
