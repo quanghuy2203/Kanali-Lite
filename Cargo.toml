@@ -1,6 +1,6 @@
 [package]
 name = "kanali-rs"
-version = "0.2.1"
+version = "0.2.2"
 default-run = "kanali"
 edition = "2021"
 description = "Điều khiển màn hình Tryx Panorama: nhẹ RAM, có giao diện và tự cập nhật"
@@ -29,9 +29,14 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 ureq = { version = "2.10", features = ["json"] }
 sha2 = "0.10"
+tempfile = "3"
+zip = { version = "2", default-features = false, features = ["deflate"] }
 eframe = { version = "0.29", default-features = false, features = ["glow", "default_fonts"], optional = true }
 tao = { version = "0.30", optional = true }
 tray-icon = { version = "0.19", optional = true }
+
+[target.'cfg(windows)'.dependencies]
+rfd = { version = "0.15", default-features = false }
 
 [dependencies.windows]
 version = "0.58"

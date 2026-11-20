@@ -104,6 +104,28 @@ fn session(sh: &Arc<Shared>) -> Result<(), String> {
     let mut last_hb = Instant::now();
     loop {
         thread::sleep(Duration::from_millis(400));
+        if let Some(path) = crate::media::pending() {
+            let name = path.file_name().unwrap().to_string_lossy().into_owned();
+            let mut last = Instant::now();
+            sh.with(|s| s.media_status = format!("Đang gửi {name}…"));
+            let result = device::upload(&mut f, &path, &name, |done, total| {
+                if last.elapsed() >= Duration::from_millis(500) {
+                    sh.with(|s| s.media_status = format!("Đang gửi {name} · {}%", done * 100 / total));
+                    last = Instant::now();
+                }
+            }).and_then(|_| device::fetch_files(&mut f)).and_then(|files| {
+                if !files.iter().any(|p| p.rsplit('/').next() == Some(name.as_str())) {
+                    return Err("Màn hình chưa xác nhận tệp trong thư viện".into());
+                }
+                sh.with(|s| { s.files = files; s.media_status = format!("Đã thêm {name}"); });
+                Ok(())
+            });
+            std::fs::remove_file(&path).map_err(|e| e.to_string())?;
+            if let Err(e) = result {
+                sh.with(|s| s.media_status = format!("Không gửi được {name}: {e}. Có thể chọn lại tệp nguồn."));
+                return Err(e);
+            }
+        }
         if sh.refresh.swap(false, Ordering::Relaxed) {
             let files = device::fetch_files(&mut f)?;
             sh.with(|s| s.files = files);
@@ -204,19 +226,21 @@ fn do_update(sh: &Arc<Shared>) {
         s.update.status = "Đang tải bản cập nhật...".into();
     });
     let mut last = 0.0f32;
+    let launch_path = std::env::current_exe();
     let res = update::download_and_replace(&found, &mut |p| {
         if p - last >= 0.01 || p >= 1.0 {
             last = p;
             sh.with(|s| s.update.progress = p);
         }
     });
-    match res {
-        Ok(()) => {
-            sh.with(|s| s.update.status = "Đã cập nhật, đang khởi động lại...".into());
-            thread::sleep(Duration::from_millis(800));
-            if let Ok(exe) = std::env::current_exe() {
-                let _ = Command::new(exe).arg("--after-update").spawn();
-            }
+    match res.and_then(|_| {
+        let exe = launch_path.map_err(|e| e.to_string())?;
+        Command::new(exe).arg("--after-update").spawn().map_err(|e| format!("Không thể mở bản mới: {e}"))
+    }) {
+        Ok(_) => {
+            sh.with(|s| { s.update.restart = true; s.update.status = "Đang khởi động lại".into(); });
+            // Giao diện đọc state.json mỗi giây. Chờ nó nhả khóa trước khi bàn giao daemon.
+            let _ = config::acquire_lock("ui.lock", Duration::from_secs(5));
             std::process::exit(0);
         }
         Err(e) => {

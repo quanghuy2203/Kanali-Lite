@@ -1,0 +1,29 @@
+name: Windows GUI
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: windows-latest
+    env:
+      KANALI_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --locked --lib
+      - run: cargo build --locked --release --bin kanali
+      - id: package
+        shell: pwsh
+        run: |
+          $version = (cargo metadata --no-deps --format-version 1 | ConvertFrom-Json).packages[0].version
+          "version=$version" >> $env:GITHUB_OUTPUT
+          Copy-Item target/release/kanali.exe kanali-windows-x64.exe
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kanali-windows-x64-v${{ steps.package.outputs.version }}
+          path: kanali-windows-x64.exe
+          if-no-files-found: error

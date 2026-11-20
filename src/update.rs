@@ -1,4 +1,4 @@
-//! Tự cập nhật từ GitHub Releases, có kiểm tra SHA-256 trước khi thay chương trình.
+//! Cập nhật từ artifact của GitHub Actions, đối chiếu digest trước khi giải nén.
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::{
@@ -15,25 +15,13 @@ pub const DEFAULT_REPO: &str = match option_env!("KANALI_REPO") {
 pub const ASSET_NAME: &str = "kanali-windows-x64.exe";
 
 #[derive(Deserialize)]
-struct Asset {
-    name: String,
-    browser_download_url: String,
-}
-
+struct Runs { workflow_runs: Vec<Run> }
 #[derive(Deserialize)]
-struct Release {
-    tag_name: String,
-    #[serde(default)]
-    body: String,
-    #[serde(default)]
-    html_url: String,
-    #[serde(default)]
-    prerelease: bool,
-    #[serde(default)]
-    draft: bool,
-    #[serde(default)]
-    assets: Vec<Asset>,
-}
+struct Run { id: u64, html_url: String }
+#[derive(Deserialize)]
+struct Artifacts { artifacts: Vec<Artifact> }
+#[derive(Deserialize)]
+struct Artifact { id: u64, name: String, digest: Option<String>, expired: bool }
 
 #[derive(Clone, Debug)]
 pub struct Found {
@@ -41,7 +29,7 @@ pub struct Found {
     pub notes: String,
     pub url: String,
     pub download: String,
-    pub sha_url: String,
+    digest: String,
 }
 
 pub fn parse_ver(s: &str) -> Option<(u64, u64, u64)> {
@@ -62,10 +50,6 @@ fn valid_repo(r: &str) -> bool {
         && r.split('/').all(|p| !p.is_empty())
 }
 
-fn allowed(url: &str) -> bool {
-    url.starts_with("https://github.com/")
-}
-
 fn agent() -> ureq::Agent {
     ureq::AgentBuilder::new()
         .timeout_connect(Duration::from_secs(15))
@@ -80,103 +64,50 @@ pub fn check(repo: &str, current: &str) -> Result<Option<Found>, String> {
     if !valid_repo(repo) {
         return Err("Chưa thiết lập kho GitHub (dạng tên-người-dùng/tên-repo)".into());
     }
-    let url = format!("https://api.github.com/repos/{repo}/releases/latest");
-    let resp = match agent().get(&url).set("Accept", "application/vnd.github+json").call() {
-        Ok(r) => r,
-        Err(ureq::Error::Status(404, _)) => return Err("Kho chưa có bản phát hành nào".into()),
-        Err(e) => return Err(format!("Không kết nối được GitHub: {e}")),
-    };
-    let rel: Release = resp.into_json().map_err(|e| format!("Phản hồi GitHub lỗi: {e}"))?;
-    if rel.draft || rel.prerelease {
-        return Ok(None);
-    }
-    let (Some(cur), Some(lat)) = (parse_ver(current), parse_ver(&rel.tag_name)) else {
-        return Err(format!("Không đọc được số phiên bản: {}", rel.tag_name));
-    };
-    if lat <= cur {
-        return Ok(None);
-    }
-    let sha_name = format!("{ASSET_NAME}.sha256");
-    let exe = rel
-        .assets
-        .iter()
-        .find(|a| a.name == ASSET_NAME)
-        .ok_or("Bản phát hành thiếu file kanali-windows-x64.exe")?;
-    let sha = rel
-        .assets
-        .iter()
-        .find(|a| a.name == sha_name)
-        .ok_or("Bản phát hành thiếu file .sha256")?;
-    if !allowed(&exe.browser_download_url) || !allowed(&sha.browser_download_url) {
-        return Err("Địa chỉ tải không hợp lệ".into());
-    }
-    Ok(Some(Found {
-        latest: rel.tag_name.clone(),
-        notes: rel.body.clone(),
-        url: rel.html_url.clone(),
-        download: exe.browser_download_url.clone(),
-        sha_url: sha.browser_download_url.clone(),
-    }))
+    let api = format!("https://api.github.com/repos/{repo}/actions");
+    let client = agent();
+    let runs: Runs = client.get(&format!("{api}/workflows/build.yml/runs?branch=main&event=push&status=success&per_page=1"))
+        .call().map_err(|e| e.to_string())?.into_json().map_err(|e| e.to_string())?;
+    let run = runs.workflow_runs.first().ok_or("Chưa có lượt build thành công")?;
+    let artifacts: Artifacts = client.get(&format!("{api}/runs/{}/artifacts", run.id))
+        .call().map_err(|e| e.to_string())?.into_json().map_err(|e| e.to_string())?;
+    let artifact = artifacts.artifacts.iter().find(|a| !a.expired && a.name.starts_with("kanali-windows-x64-v"))
+        .ok_or("Artifact không còn khả dụng")?;
+    let latest = artifact.name.trim_start_matches("kanali-windows-x64-");
+    if parse_ver(latest).ok_or("Phiên bản artifact không hợp lệ")? <= parse_ver(current).ok_or("Phiên bản không hợp lệ")? { return Ok(None); }
+    let digest = artifact.digest.as_deref().and_then(|v| v.strip_prefix("sha256:")).ok_or("GitHub không cung cấp SHA-256")?;
+    Ok(Some(Found { latest: latest.into(), notes: String::new(), url: run.html_url.clone(),
+        download: format!("https://nightly.link/{repo}/actions/artifacts/{}.zip", artifact.id), digest: digest.into() }))
 }
 
-/// Tải bản mới, kiểm tra SHA-256, rồi thay file đang chạy (đổi tên cũ thành .old).
-/// Trả về Ok khi đã thay xong; người gọi phải tự khởi động lại chương trình.
 pub fn download_and_replace(f: &Found, progress: &mut dyn FnMut(f32)) -> Result<(), String> {
-    let ag = agent();
-    let sha_text = ag
-        .get(&f.sha_url)
-        .call()
-        .map_err(|e| e.to_string())?
-        .into_string()
-        .map_err(|e| e.to_string())?;
-    let expected = sha_text.split_whitespace().next().unwrap_or("").to_lowercase();
-    if expected.len() != 64 || !expected.chars().all(|c| c.is_ascii_hexdigit()) {
-        return Err("File .sha256 không hợp lệ".into());
-    }
-
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let new = exe.with_extension("exe.new");
     let old = exe.with_extension("exe.old");
-
-    let resp = ag.get(&f.download).call().map_err(|e| e.to_string())?;
-    let total: u64 = resp.header("Content-Length").and_then(|v| v.parse().ok()).unwrap_or(0);
-    let mut reader = resp.into_reader();
-    let mut out = File::create(&new)
-        .map_err(|e| format!("Không ghi được {}: {e}", new.display()))?;
-
-    let mut hasher = Sha256::new();
-    let mut buf = vec![0u8; 64 * 1024];
-    let mut done = 0u64;
-    let mut first = [0u8; 2];
+    let response = agent().get(&f.download).call().map_err(|e| e.to_string())?;
+    let total = response.header("Content-Length").and_then(|n| n.parse::<usize>().ok()).unwrap_or(0);
+    let mut reader = response.into_reader();
+    let mut archive = tempfile::tempfile().map_err(|e| e.to_string())?;
+    let mut hash = Sha256::new();
+    let mut buf = [0; 65536];
+    let mut size = 0;
     loop {
-        let n = reader.read(&mut buf).map_err(|e| format!("Tải lỗi: {e}"))?;
-        if n == 0 {
-            break;
-        }
-        if done < 2 {
-            let start = done as usize;
-            let count = n.min(2 - start);
-            first[start..start + count].copy_from_slice(&buf[..count]);
-        }
-        hasher.update(&buf[..n]);
-        out.write_all(&buf[..n]).map_err(|e| format!("Ghi lỗi: {e}"))?;
-        done += n as u64;
-        if total > 0 {
-            progress((done as f32 / total as f32).min(1.0));
-        }
+        let n = reader.read(&mut buf).map_err(|e| e.to_string())?;
+        if n == 0 { break; }
+        size += n;
+        if size > 64 * 1024 * 1024 { return Err("Artifact quá lớn".into()); }
+        archive.write_all(&buf[..n]).map_err(|e| e.to_string())?;
+        hash.update(&buf[..n]);
+        if total > 0 { progress((size as f32 / total as f32).min(0.99)); }
     }
+    if format!("{:x}", hash.finalize()) != f.digest { return Err("SHA-256 khác với GitHub Actions".into()); }
+    let mut zip = zip::ZipArchive::new(archive).map_err(|e| e.to_string())?;
+    let mut entry = zip.by_name(ASSET_NAME).map_err(|e| e.to_string())?;
+    if !(500_000..=100_000_000).contains(&entry.size()) { return Err("Kích thước chương trình không hợp lệ".into()); }
+    let mut out = File::create(&new).map_err(|e| e.to_string())?;
+    std::io::copy(&mut entry, &mut out).map_err(|e| e.to_string())?;
+    out.sync_all().map_err(|e| e.to_string())?;
     drop(out);
-
-    let got: String = hasher.finalize().iter().map(|b| format!("{b:02x}")).collect();
-    if got != expected {
-        let _ = fs::remove_file(&new);
-        return Err("Sai mã SHA-256, đã hủy cập nhật".into());
-    }
-    if first != *b"MZ" || done < 500_000 {
-        let _ = fs::remove_file(&new);
-        return Err("File tải về không phải chương trình Windows hợp lệ".into());
-    }
-
     let _ = fs::remove_file(&old);
     fs::rename(&exe, &old).map_err(|e| {
         format!("Không thay được chương trình (hãy đặt trong thư mục có quyền ghi): {e}")

@@ -6,6 +6,7 @@
 #![windows_subsystem = "windows"]
 
 mod daemon;
+mod media;
 mod ui;
 
 use std::{env, process::Command, time::Duration};
@@ -36,9 +37,9 @@ fn main() {
         return;
     }
 
-    let quiet = has("--background") || has("--after-update");
+    let quiet = has("--background");
     // Sau khi cập nhật, tiến trình cũ cần vài giây để nhả khóa.
-    let wait = if quiet { Duration::from_secs(8) } else { Duration::from_millis(300) };
+    let wait = if quiet || has("--after-update") { Duration::from_secs(8) } else { Duration::from_millis(300) };
 
     match config::acquire_lock("daemon.lock", wait) {
         Some(lock) => {

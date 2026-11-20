@@ -161,3 +161,40 @@ pub fn heartbeat(f: &mut File) -> Result<(), String> {
     send(f, &proto::msg_hello())?;
     read_frame(f).map(|_| ())
 }
+
+/// The Panorama printer-class protocol acknowledges each part of one tracked transfer.
+pub fn upload(f: &mut File, path: &std::path::Path, name: &str, mut progress: impl FnMut(u64, u64)) -> Result<(), String> {
+    let mut input = File::open(path).map_err(|e| e.to_string())?;
+    let size = input.metadata().map_err(|e| e.to_string())?.len();
+    if !(1..=500_000_000).contains(&size) { return Err("Video phải nhỏ hơn 500 MB".into()); }
+    let track = now_ms();
+    let mut exchange = |field, body: Vec<u8>| -> Result<(), String> {
+        let header = proto::f_bytes(1, &proto::f_varint(2, track));
+        send(f, &[header, proto::f_bytes(field, &body)].concat())?;
+        for _ in 0..16 {
+            let reply = read_frame(f)?;
+            let fields = proto::parse(&reply).ok_or("Phản hồi USB không hợp lệ")?;
+            let id = proto::find_bytes(&fields, 1).and_then(proto::parse).and_then(|h| proto::find_int(&h, 2));
+            if id != Some(track) { continue; }
+            if let Some(err) = proto::find_bytes(&fields, 2).and_then(proto::parse) {
+                if proto::find_int(&err, 1).unwrap_or(0) != 0 { return Err(proto::find_str(&err, 2)); }
+            }
+            if let Some(status) = proto::find_bytes(&fields, field + 400).and_then(proto::parse) {
+                let code = proto::find_int(&status, 1).unwrap_or(0);
+                return if code == 0 { Ok(()) } else { Err(format!("Thiết bị từ chối truyền tệp (mã {code})")) };
+            }
+        }
+        Err("Thiếu xác nhận truyền tệp từ màn hình".into())
+    };
+    exchange(400, [proto::f_str(1, name), proto::f_varint(2, size)].concat())?;
+    let mut buf = vec![0; 256 * 1024];
+    let mut done = 0;
+    while done < size {
+        let n = input.read(&mut buf).map_err(|e| e.to_string())?;
+        if n == 0 { return Err("Tệp nguồn bị rút ngắn".into()); }
+        exchange(401, proto::f_bytes(1, &buf[..n]))?;
+        done += n as u64;
+        progress(done, size);
+    }
+    exchange(402, proto::f_str(1, "media"))
+}

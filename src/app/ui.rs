@@ -186,9 +186,19 @@ impl Page {
     }
 }
 
+struct Clip {
+    frames: Vec<u8>,
+    texture: egui::TextureHandle,
+    start: Instant,
+    current: usize,
+}
+
 struct App {
     page: Page,
     display_tab: bool,
+    media_job: Option<std::sync::mpsc::Receiver<Result<String,String>>>,
+    media_note: String,
+    preview: Option<(String, Option<Clip>)>,
     cfg: Config,
     state: State,
     last_read: Instant,
@@ -200,7 +210,7 @@ impl App {
     fn new() -> Self {
         let cfg: Config = config::load_opt(&config::config_path()).unwrap_or_default();
         let state: State = config::load_opt(&config::state_path()).unwrap_or_default();
-        Self { page: Page::Home, display_tab: false, cfg, state, last_read: Instant::now(), autostart: autostart::is_enabled(), notice: String::new() }
+        Self { media_job: None, media_note: String::new(), preview: None, page: Page::Home, display_tab: false, cfg, state, last_read: Instant::now(), autostart: autostart::is_enabled(), notice: String::new() }
     }
 
     fn save(&self) {
@@ -251,9 +261,77 @@ impl App {
         });
     }
 
+    fn pick_media(&mut self, project: bool, poster_for: Option<String>) {
+        let picker = rfd::FileDialog::new();
+        let source = if project {
+            picker.set_title("Wallpaper Engine · Chọn project.json trong thư mục Workshop hoặc myprojects").add_filter("Wallpaper Engine", &["json"]).pick_file()
+        } else {
+            picker.add_filter("Video / GIF", &["mp4","mkv","mov","webm","avi","gif","m4v","h264"]).pick_file()
+        };
+        let Some(source) = source else { return; };
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.media_job = Some(rx);
+        self.media_note = "Đang chuẩn bị media…".into();
+        std::thread::spawn(move || {
+            let result = match poster_for {
+                Some(name) => crate::media::make_poster(&source, &name).map(|_| "Đã lưu ảnh xem trước".into()),
+                None => crate::media::import(source, project),
+            };
+            let _ = tx.send(result);
+        });
+    }
+
+    fn preview_panel(&mut self, ui: &mut egui::Ui) {
+        let name = &self.cfg.playing;
+        if self.preview.as_ref().map(|(n, _)| n) != Some(name) {
+            let frame_size = 240*116*3;
+            let image = std::fs::read(crate::media::poster(name)).ok()
+                .filter(|b| !b.is_empty() && b.len() <= 8*frame_size && b.len() % frame_size == 0)
+                .map(|frames| {
+                    let texture = ui.ctx().load_texture("media-preview", egui::ColorImage::from_rgb([240,116], &frames[..frame_size]), Default::default());
+                    Clip { frames, texture, start: Instant::now(), current: 0 }
+                });
+            self.preview = Some((name.clone(), image));
+        }
+        ui.horizontal_wrapped(|ui| {
+            if let Some((_, Some(clip))) = &mut self.preview {
+                let size = 240*116*3;
+                let count = clip.frames.len() / size;
+                if count > 1 {
+                    let elapsed = clip.start.elapsed().as_millis() as usize;
+                    let index = (elapsed / 500) % count;
+                    if index != clip.current {
+                        clip.texture.set(egui::ColorImage::from_rgb([240,116], &clip.frames[index*size..(index+1)*size]), Default::default());
+                        clip.current = index;
+                    }
+                    ui.ctx().request_repaint_after(Duration::from_millis((500 - elapsed % 500) as u64));
+                }
+                ui.image((clip.texture.id(), vec2(180.0,87.0)));
+            }
+            ui.vertical(|ui| {
+                ui.strong(label_of(&self.cfg.playing));
+                ui.small(&self.cfg.playing);
+                if self.preview.as_ref().is_some_and(|p| p.1.is_none()) {
+                    ui.small("Chưa có ảnh xem trước trên máy.");
+                    if ui.add_enabled(self.media_job.is_none(), egui::Button::new("Ghép video nguồn để xem trước")).clicked() {
+                        self.pick_media(false, Some(self.cfg.playing.clone()));
+                    }
+                }
+            });
+        });
+    }
+
     fn video_card(&mut self, ui: &mut egui::Ui) {
         card(ui, |ui| {
-            title(ui, "Video đang phát");
+            title(ui, "Video đã chọn");
+            self.preview_panel(ui);
+            ui.separator();
+            ui.horizontal_wrapped(|ui| {
+                if ui.add_enabled(self.media_job.is_none(), egui::Button::new("Thêm video / GIF")).clicked() { self.pick_media(false, None); }
+                if ui.add_enabled(self.media_job.is_none(), egui::Button::new("Nhập từ Wallpaper Engine")).on_hover_text("Chọn project.json. Web và Scene được ghi thành clip 15 giây.").clicked() { self.pick_media(true, None); }
+            });
+            if !self.media_note.is_empty() { ui.label(&self.media_note); }
+            if !self.state.media_status.is_empty() { ui.label(&self.state.media_status); }
             if self.state.files.is_empty() {
                 ui.label(RichText::new("Chưa có danh sách video (chưa kết nối màn hình).").color(DIM));
             }
@@ -396,8 +474,25 @@ impl App {
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        if let Some(job) = &self.media_job {
+            match job.try_recv() {
+                Ok(result) => {
+                    self.media_note = result.unwrap_or_else(|e| format!("Lỗi: {e}"));
+                    self.preview = None;
+                    self.media_job = None;
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    self.media_note = "Tác vụ media bị gián đoạn".into();
+                    self.media_job = None;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => (),
+            }
+        }
         if self.last_read.elapsed() >= Duration::from_millis(1000) {
             if let Some(s) = config::load_opt::<State>(&config::state_path()) {
+                if s.update.restart && s.version == env!("CARGO_PKG_VERSION") && config::now_ms().saturating_sub(s.updated_ms) < 7000 {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
                 self.state = s;
             }
             self.last_read = Instant::now();

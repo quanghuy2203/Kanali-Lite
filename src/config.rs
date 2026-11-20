@@ -74,6 +74,7 @@ pub struct UpdateInfo {
     pub status: String,
     pub progress: f32,
     pub busy: bool,
+    pub restart: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Default, Debug)]
@@ -86,6 +87,7 @@ pub struct State {
     pub files: Vec<String>,
     pub update: UpdateInfo,
     pub updated_ms: u64,
+    pub media_status: String,
 }
 
 pub fn load_opt<T: DeserializeOwned>(path: &Path) -> Option<T> {
