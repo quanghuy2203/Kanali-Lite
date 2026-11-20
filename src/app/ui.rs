@@ -53,7 +53,7 @@ fn setup(ctx: &egui::Context) {
     v.panel_fill = BG;
     v.window_fill = CARD;
     v.extreme_bg_color = Color32::from_rgb(9, 11, 17);
-    v.widgets.noninteractive.bg_stroke = Stroke::new(1.0, BORDER);
+    v.widgets.noninteractive.bg_stroke = Stroke::new(1.0_f32, BORDER);
     v.widgets.inactive.bg_fill = Color32::from_rgb(30, 37, 52);
     v.widgets.inactive.weak_bg_fill = Color32::from_rgb(30, 37, 52);
     v.widgets.hovered.weak_bg_fill = Color32::from_rgb(40, 49, 68);
@@ -61,7 +61,7 @@ fn setup(ctx: &egui::Context) {
         w.rounding = Rounding::same(8.0);
     }
     v.selection.bg_fill = ACCENT.gamma_multiply(0.30);
-    v.selection.stroke = Stroke::new(1.0, ACCENT);
+    v.selection.stroke = Stroke::new(1.0_f32, ACCENT);
     ctx.set_visuals(v);
     ctx.style_mut(|s| {
         s.spacing.item_spacing = vec2(8.0, 8.0);
@@ -74,7 +74,7 @@ fn setup(ctx: &egui::Context) {
 fn card(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) {
     egui::Frame::none()
         .fill(CARD)
-        .stroke(Stroke::new(1.0, BORDER))
+        .stroke(Stroke::new(1.0_f32, BORDER))
         .rounding(12.0)
         .inner_margin(Margin::same(14.0))
         .show(ui, |ui| {
@@ -162,7 +162,7 @@ fn combo(ui: &mut egui::Ui, label: &str, cur: &mut String, files: &[String], ext
             let mut seen = std::collections::HashSet::new();
             for o in std::iter::once(extra).chain(files.iter().map(|p| file_of(p))) {
                 if !seen.insert(o) { continue; }
-                if ui.selectable_label(*cur == o, label_of(&o)).clicked() {
+                if ui.selectable_label(*cur == o, label_of(o)).clicked() {
                     *cur = o.to_owned();
                     changed = true;
                 }
@@ -258,7 +258,7 @@ impl App {
                         let selected = self.cfg.playing == file;
                         let resp = ui.add_sized(
                             [ui.available_width(), 28.0],
-                            egui::SelectableLabel::new(selected, label_of(&file)),
+                            egui::SelectableLabel::new(selected, label_of(file)),
                         );
                         if resp.clicked() {
                             chosen = Some(file.to_owned());

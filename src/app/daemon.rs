@@ -24,7 +24,6 @@ use tray_icon::{
 struct Shared {
     state: Mutex<State>,
     found: Mutex<Option<update::Found>>,
-    write_lock: Mutex<()>,
     refresh: AtomicBool,
     updating: AtomicBool,
 }
@@ -35,7 +34,6 @@ impl Shared {
         Self {
             state: Mutex::new(state),
             found: Mutex::new(None),
-            write_lock: Mutex::new(()),
             refresh: AtomicBool::new(false),
             updating: AtomicBool::new(false),
         }
@@ -43,14 +41,10 @@ impl Shared {
 
     /// Sửa trạng thái rồi ghi ra state.json cho giao diện đọc.
     fn with<F: FnOnce(&mut State)>(&self, f: F) {
-        let snapshot = {
-            let mut g = self.state.lock().unwrap();
-            f(&mut g);
-            g.updated_ms = config::now_ms();
-            g.clone()
-        };
-        let _w = self.write_lock.lock().unwrap();
-        let _ = config::save(&config::state_path(), &snapshot);
+        let mut state = self.state.lock().unwrap();
+        f(&mut state);
+        state.updated_ms = config::now_ms();
+        let _ = config::save(&config::state_path(), &*state);
     }
 }
 
