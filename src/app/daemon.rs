@@ -79,10 +79,12 @@ fn worker(sh: Arc<Shared>) {
 }
 
 fn session(sh: &Arc<Shared>) -> Result<(), String> {
+    let session_start=config::now_ms();
     let path = device::find_device()?;
     let mut f = device::open_device(&path)?;
     let replies = device::init_session(&mut f)?;
     let info = device::parse_info(&replies);
+    let serial=info.serial.clone();
     let files = device::fetch_files(&mut f)?;
 
     let mut cfg = match config::load_opt::<Config>(&config::config_path()) {
@@ -101,10 +103,22 @@ fn session(sh: &Arc<Shared>) -> Result<(), String> {
         s.files = files;
     });
 
+    let request_path=config::data_dir().join("remove-request.json");
     let mut sampler=crate::telemetry::Sampler::default();
     let mut last_hb = Instant::now();
     loop {
         thread::sleep(Duration::from_millis(400));
+        if let Some(req)=config::load_opt::<config::Removal>(&request_path){
+            if std::fs::remove_file(&request_path).is_ok(){
+                let result=if req.serial!=serial || req.requested_ms<session_start || config::now_ms().saturating_sub(req.requested_ms)>30_000 {
+                    Err("Yêu cầu xóa hết hạn sau khi đổi kết nối.".into())
+                }else{device::remove_media(&mut f,&req.path,&config::load_opt::<Config>(&config::config_path()).ok_or("Không đọc được cấu hình")?)};
+                match result{
+                    Ok(files)=>{let name=req.path.rsplit('/').next().unwrap_or("");let _=std::fs::remove_file(crate::media::poster(name));let _=std::fs::remove_file(crate::media::poster(name).with_extension("numbered.rgb"));sh.with(|s|{s.files=files;s.media_status=format!("Đã xóa {name}");});}
+                    Err(e)=>sh.with(|s|s.media_status=format!("Chưa xóa: {e}")),
+                }
+            }
+        }
         if let Some(path) = crate::media::pending() {
             let name = path.file_name().unwrap().to_string_lossy().into_owned();
             let mut last = Instant::now();

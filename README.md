@@ -36,17 +36,17 @@ Preset có các thẻ xếp lớp. Dùng mũi tên để xem, bấm **Lưu vào 
 
 Trong **Customization**, chọn Full Screen hoặc Screen Splitting. Với màn hình chia đôi, bấm từng ô và chọn media cho bên đó trước khi lưu. Chế độ phát gồm Single, Loop và Shuffle. Lớp thông tin hỗ trợ CPU Usage, Memory Utilization và Date & Time, với màu chữ, cỡ chữ và căn lề. Các mục nhiệt độ, xung nhịp, công suất và GPU lấy từ cảm biến do LibreHardwareMonitor công bố qua WMI. Chọn tối đa ba mục; dấu gạch ngang nghĩa là chưa có số đo.
 
-### Steam Workshop
+### Thư viện Wallpaper Engine
 
-Mở **Customization → Steam Workshop**. Đăng nhập trên trang Steam bằng tài khoản đang chạy trong Steam Desktop, tìm wallpaper và bấm **Subscribe**. Quay về Lite rồi bấm **Nhập mục**. Lite tìm đúng ID trong các thư viện Steam và chờ Steam tải xong. Cần Microsoft Edge WebView2, Steam và Wallpaper Engine. Cửa sổ Workshop chạy riêng và giải phóng WebView khi đóng.
+Trong **Customization**, bấm **Mở thư viện Wallpaper Engine**. Cửa sổ riêng hiển thị ảnh bìa, tên và loại của từng dự án, có ô tìm kiếm và nút nhập. **Mở Wallpaper Engine để tải thêm** mở ứng dụng chính chủ. Khi tải xong, Lite tự cập nhật danh sách. Bật **Tự nhập wallpaper mới tải** để chuyển các mục mới vào hàng chờ USB khi cửa sổ còn mở. Web và Scene được ghi thành clip 15 giây, Video dùng tệp nguồn.
 
-Dự án Video dùng tệp nguồn. Web và Scene cần Wallpaper Engine đang chạy. Lite mở dự án trong cửa sổ riêng và ghi 15 giây để phát lặp; giữ cửa sổ này hiển thị trong lúc ghi.
+Trong thư viện PANORAMA, bấm **Xóa** trên thẻ media đã thêm rồi xác nhận. Nếu tệp đang dùng cho phát chính, khởi động hay chờ, chọn và lưu tệp thay thế trước.
 
 ## Dữ liệu
 Cấu hình và trạng thái nằm ở `%APPDATA%\kanali-rs\` (`config.json`, `state.json`). Nếu chương trình lỗi, xem `crash.log` trong thư mục đó.
 
 ### Kết nối với ứng dụng Wallpaper Engine
 
-Trong **Customization → Wallpaper Engine**, chọn số màn hình PC (bắt đầu từ 0) rồi bấm **Kết nối / đọc wallpaper đang chạy**. Lite hỏi ứng dụng đang chạy bằng lệnh `getWallpaper`. Sau khi thấy tên wallpaper, bấm **Nhập vào PANORAMA** để lấy nội dung hiện tại. Đổi wallpaper trên desktop rồi bấm đọc lại để cập nhật lựa chọn. Steam Workshop vẫn dùng để tìm và tải nội dung mới.
+Trong **Customization → Wallpaper Engine**, chọn số màn hình PC (bắt đầu từ 0) rồi bấm **Kết nối / đọc wallpaper đang chạy**. Lite hỏi ứng dụng đang chạy bằng lệnh `getWallpaper`. Sau khi thấy tên wallpaper, bấm **Nhập vào PANORAMA** để lấy nội dung hiện tại. Đổi wallpaper trên desktop rồi bấm đọc lại để cập nhật lựa chọn. Lite tự khởi chạy Wallpaper Engine qua Steam nếu cần.
 
 Preset và Customization hiển thị số đo trong bảng và trên preview của các mục đã chọn. CPU Usage và RAM được lấy trực tiếp từ Windows. GPU Usage và xung nhịp dùng nguồn Windows khi khả dụng; driver NVIDIA và LibreHardwareMonitor bổ sung cảm biến tùy phần cứng. Dấu gạch ngang biểu thị nguồn chưa trả về giá trị.

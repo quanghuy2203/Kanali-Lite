@@ -414,8 +414,157 @@ impl App {
             self.carousel(ui, &presets);
         }
         ui.separator();
-        self.metrics(ui);
+        if !self.display_tab {
+            self.metrics(ui);
+        }
         if self.display_tab {
+            ui.separator();
+            ui.heading("Thư viện media trên PANORAMA");
+            ui.horizontal_wrapped(|ui| {
+                if ui
+                    .add_enabled(
+                        self.media_job.is_none(),
+                        egui::Button::new("Thêm video / GIF").min_size(vec2(165., 40.)),
+                    )
+                    .clicked()
+                {
+                    self.pick_media(None);
+                }
+                if ui
+                    .add_sized(
+                        [250., 42.],
+                        egui::Button::new("Mở thư viện Wallpaper Engine"),
+                    )
+                    .clicked()
+                {
+                    crate::spawn_self("--library");
+                }
+                if ui.button("GIPHY").clicked() {
+                    crate::spawn_self("--giphy");
+                }
+                if let Some(id) = self.gif_id.as_ref() {
+                    if ui
+                        .add_enabled(
+                            self.media_job.is_none(),
+                            egui::Button::new("Nhập GIF đã chọn"),
+                        )
+                        .on_hover_text(id)
+                        .clicked()
+                    {
+                        let id = id.clone();
+                        let (tx, rx) = std::sync::mpsc::channel();
+                        self.media_job = Some(rx);
+                        self.media_note = "Đang tải GIF…".into();
+                        std::thread::spawn(move || {
+                            let _ = tx.send(crate::giphy::import_gif(&id));
+                        });
+                    }
+                }
+            });
+            let cols = ((ui.available_width() + 8.) / 230.).floor().max(1.) as usize;
+            let mut visible = if self.draft.split {
+                vec![self.draft.left.clone(), self.draft.right.clone()]
+            } else {
+                vec![self.full.clone()]
+            };
+            egui::ScrollArea::vertical()
+                .id_salt("custom-media")
+                .min_scrolled_height(240.)
+                .max_height(480.)
+                .show_rows(ui, 142., files.len().div_ceil(cols), |ui, rows| {
+                    for row in rows {
+                        ui.horizontal(|ui| {
+                            let width =
+                                (ui.available_width() - 8. * (cols - 1) as f32) / cols as f32;
+                            for file in files.iter().skip(row * cols).take(cols) {
+                                let (rect, response) =
+                                    ui.allocate_exact_size(vec2(width, 142.), Sense::click());
+                                let active = if !self.draft.split {
+                                    file == &self.full
+                                } else if self.right_slot {
+                                    file == &self.draft.right
+                                } else {
+                                    file == &self.draft.left
+                                };
+                                self.stage(ui, rect, file, false);
+                                if active {
+                                    ui.painter().rect_stroke(
+                                        rect,
+                                        8.,
+                                        Stroke::new(2.0_f32, ACCENT),
+                                    );
+                                }
+                                visible.push(file.clone());
+                                if let Some(path) = self.state.files.iter().find(|p| {
+                                    p.rsplit_once('/').is_some_and(|(dir, n)| {
+                                        dir.ends_with("/media") && n == file
+                                    })
+                                }) {
+                                    let delete_box = Rect::from_min_size(
+                                        rect.right_bottom() - vec2(69., 36.),
+                                        vec2(63., 30.),
+                                    );
+                                    let delete = ui.interact(
+                                        delete_box,
+                                        ui.id().with(("delete", file)),
+                                        Sense::click(),
+                                    );
+                                    ui.painter().rect_filled(
+                                        delete_box,
+                                        5.,
+                                        if delete.hovered() {
+                                            Color32::DARK_RED
+                                        } else {
+                                            Color32::from_black_alpha(210)
+                                        },
+                                    );
+                                    ui.painter().text(
+                                        delete_box.center(),
+                                        Align2::CENTER_CENTER,
+                                        "Xóa",
+                                        FontId::proportional(15.),
+                                        Color32::WHITE,
+                                    );
+                                    if delete.clicked() {
+                                        if !self.alive() || !self.state.connected {
+                                            self.media_note = "Cần kết nối PANORAMA để xóa".into();
+                                        } else if rfd::MessageDialog::new()
+                                            .set_title("Xóa media trên PANORAMA")
+                                            .set_description(format!(
+                                                "Xóa {file} khỏi bộ nhớ màn hình?"
+                                            ))
+                                            .set_buttons(rfd::MessageButtons::YesNo)
+                                            .show()
+                                            == rfd::MessageDialogResult::Yes
+                                        {
+                                            self.media_note = config::request_removal(
+                                                path.clone(),
+                                                self.state
+                                                    .info
+                                                    .as_ref()
+                                                    .map(|i| i.serial.clone())
+                                                    .unwrap_or_default(),
+                                            )
+                                            .map(|_| "Đã gửi yêu cầu xóa".to_string())
+                                            .unwrap_or_else(|e| e);
+                                        }
+                                    }
+                                }
+                                if response.on_hover_text(file).clicked() {
+                                    let slot = if !self.draft.split {
+                                        &mut self.full
+                                    } else if self.right_slot {
+                                        &mut self.draft.right
+                                    } else {
+                                        &mut self.draft.left
+                                    };
+                                    slot.clone_from(file);
+                                }
+                            }
+                        });
+                    }
+                });
+            self.clips.retain(|k, _| visible.contains(k));
             ui.separator();
             ui.strong("Wallpaper Engine");
             ui.horizontal_wrapped(|ui| {
@@ -464,145 +613,12 @@ impl App {
                     }
                 }
             });
-            ui.horizontal_wrapped(|ui| {
-                if ui
-                    .add_enabled(
-                        self.library_query.is_none(),
-                        egui::Button::new("Đọc thư viện đã cài"),
-                    )
-                    .clicked()
-                {
-                    let (tx, rx) = std::sync::mpsc::channel();
-                    self.library_query = Some(rx);
-                    std::thread::spawn(move || {
-                        let _ = tx.send(crate::workshop::installed_projects());
-                    });
-                }
-                if !self.wallpaper_library.is_empty() {
-                    egui::ComboBox::from_id_salt("installed-project")
-                        .selected_text("Chọn wallpaper từ thư viện")
-                        .show_ui(ui, |ui| {
-                            for (name, path) in &self.wallpaper_library {
-                                if ui
-                                    .selectable_label(false, name)
-                                    .on_hover_text(path.display().to_string())
-                                    .clicked()
-                                {
-                                    self.wallpaper = Some(crate::media::ActiveWallpaper {
-                                        title: name.clone(),
-                                        source: path.clone(),
-                                        project: true,
-                                    });
-                                }
-                            }
-                        });
-                }
-            });
+
             if !self.wallpaper_note.is_empty() {
                 ui.label(&self.wallpaper_note);
             }
             ui.separator();
-            ui.strong("Upload Media Library");
-            ui.horizontal_wrapped(|ui| {
-                if ui
-                    .add_enabled(
-                        self.media_job.is_none(),
-                        egui::Button::new("Thêm video / GIF"),
-                    )
-                    .clicked()
-                {
-                    self.pick_media(None);
-                }
-                if ui.button("GIPHY").clicked() {
-                    crate::spawn_self("--giphy");
-                }
-                if let Some(id) = self.gif_id.as_ref() {
-                    if ui
-                        .add_enabled(
-                            self.media_job.is_none(),
-                            egui::Button::new("Nhập GIF đã chọn"),
-                        )
-                        .on_hover_text(id)
-                        .clicked()
-                    {
-                        let id = id.clone();
-                        let (tx, rx) = std::sync::mpsc::channel();
-                        self.media_job = Some(rx);
-                        self.media_note = "Đang tải GIF…".into();
-                        std::thread::spawn(move || {
-                            let _ = tx.send(crate::workshop::import_gif(&id));
-                        });
-                    }
-                }
-                if ui.button("Steam Workshop").clicked() {
-                    crate::spawn_self("--workshop");
-                }
-                if let Some(id) = self.workshop_id {
-                    if ui
-                        .add_enabled(
-                            self.media_job.is_none(),
-                            egui::Button::new(format!("Nhập mục {id}")),
-                        )
-                        .clicked()
-                    {
-                        let (tx, rx) = std::sync::mpsc::channel();
-                        self.media_job = Some(rx);
-                        self.media_note = "Đang chờ Steam tải wallpaper…".into();
-                        std::thread::spawn(move || {
-                            let _ = tx.send(crate::workshop::import(id));
-                        });
-                    }
-                }
-            });
-            ui.small("Trong Workshop, đăng nhập Steam, tìm wallpaper và chọn Subscribe. Quay lại đây để nhập mục vừa chọn.");
-            let cols = ((ui.available_width() + 8.) / 148.).floor().max(1.) as usize;
-            let mut visible = if self.draft.split {
-                vec![self.draft.left.clone(), self.draft.right.clone()]
-            } else {
-                vec![self.full.clone()]
-            };
-            egui::ScrollArea::vertical()
-                .id_salt("custom-media")
-                .max_height(210.)
-                .show_rows(ui, 83., files.len().div_ceil(cols), |ui, rows| {
-                    for row in rows {
-                        ui.horizontal(|ui| {
-                            let width =
-                                (ui.available_width() - 8. * (cols - 1) as f32) / cols as f32;
-                            for file in files.iter().skip(row * cols).take(cols) {
-                                let (rect, response) =
-                                    ui.allocate_exact_size(vec2(width, 78.), Sense::click());
-                                let active = if !self.draft.split {
-                                    file == &self.full
-                                } else if self.right_slot {
-                                    file == &self.draft.right
-                                } else {
-                                    file == &self.draft.left
-                                };
-                                self.stage(ui, rect, file, false);
-                                if active {
-                                    ui.painter().rect_stroke(
-                                        rect,
-                                        8.,
-                                        Stroke::new(2.0_f32, ACCENT),
-                                    );
-                                }
-                                visible.push(file.clone());
-                                if response.on_hover_text(file).clicked() {
-                                    let slot = if !self.draft.split {
-                                        &mut self.full
-                                    } else if self.right_slot {
-                                        &mut self.draft.right
-                                    } else {
-                                        &mut self.draft.left
-                                    };
-                                    slot.clone_from(file);
-                                }
-                            }
-                        });
-                    }
-                });
-            self.clips.retain(|k, _| visible.contains(k));
+            ui.collapsing("Thông số hiển thị", |ui| self.metrics(ui));
         }
         if !self.media_note.is_empty() {
             ui.label(&self.media_note);

@@ -150,3 +150,14 @@ pub fn acquire_lock(name: &str, wait: Duration) -> Option<File> {
         }
     }
 }
+
+#[derive(Serialize, Deserialize)]
+pub struct Removal { pub path:String, pub requested_ms:u64, pub serial:String }
+
+pub fn request_removal(path:String,serial:String)->Result<(),String>{
+    let dir=data_dir();
+    let tmp=tempfile::NamedTempFile::new_in(&dir).map_err(|e|e.to_string())?;
+    serde_json::to_writer(tmp.as_file(),&Removal{path,serial,requested_ms:now_ms()}).map_err(|e|e.to_string())?;
+    tmp.persist_noclobber(dir.join("remove-request.json")).map_err(|_|"Đang có một yêu cầu xóa chờ xử lý")?;
+    Ok(())
+}

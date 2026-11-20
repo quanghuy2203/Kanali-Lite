@@ -198,3 +198,69 @@ pub fn upload(f: &mut File, path: &std::path::Path, name: &str, mut progress: im
     }
     exchange(402, proto::f_str(1, "media"))
 }
+
+fn tracked_reply(f:&mut File, field:u32, body:&[u8], expected:u32)->Result<Vec<u8>,String>{
+    use std::sync::atomic::{AtomicU64,Ordering};
+    static NEXT:AtomicU64=AtomicU64::new(1);
+    let id=NEXT.fetch_add(1,Ordering::Relaxed);
+    send(f,&[proto::f_bytes(1,&proto::f_varint(2,id)),proto::f_bytes(field,body)].concat())?;
+    for _ in 0..16 {
+        let raw=read_frame(f)?;
+        let fields=proto::parse(&raw).ok_or("Phản hồi USB không hợp lệ")?;
+        if proto::find_bytes(&fields,1).and_then(proto::parse).and_then(|h|proto::find_int(&h,2))!=Some(id){continue;}
+        if let Some(err)=proto::find_bytes(&fields,2).and_then(proto::parse){
+            if proto::find_int(&err,1).unwrap_or(0)!=0{return Err(format!("Thiết bị từ chối: {}",proto::find_str(&err,2)));}
+        }
+        if let Some(body)=proto::find_bytes(&fields,expected){return Ok(body.to_vec());}
+    }
+    Err("Thiếu xác nhận từ PANORAMA".into())
+}
+
+fn removable(catalog:&[u8],path:&str)->bool{
+    let Some((dir,name))=path.rsplit_once('/') else{return false};
+    if !dir.ends_with("/media") || name.is_empty(){return false;}
+    let Some(fields)=proto::parse(catalog) else{return false};
+    let mut allowed=false;
+    let mut count=0;
+    for (kind,val) in fields{
+        if let proto::Val::Bytes(bytes)=val{
+            if let Some(entry)=proto::parse(bytes){
+                let file=proto::find_str(&entry,1);
+                if file.rsplit('/').next()==Some(name){
+                    count+=1;
+                    allowed=kind==1 && file==path && proto::find_int(&entry,4).unwrap_or(0)==0;
+                }
+            }
+        }
+    }
+    allowed && count==1
+}
+
+pub fn remove_media(f:&mut File,path:&str,cfg:&Config)->Result<Vec<String>,String>{
+    let catalog=tracked_reply(f,103,&proto::f_str(1,"N/A"),503)?;
+    if !removable(&catalog,path){return Err("Chỉ xóa được media người dùng trong thư viện hiện tại.".into());}
+    let name=path.rsplit('/').next().unwrap_or("");
+    if [cfg.playing.as_str(),&cfg.poweron,&cfg.standby].contains(&name) || (cfg.layout.split && [cfg.layout.left.as_str(),&cfg.layout.right].contains(&name)){
+        return Err("Video đang được sử dụng. Chọn video khác và lưu trước khi xóa.".into());
+    }
+    tracked_reply(f,403,&[proto::f_str(1,name),proto::f_str(2,"media")].concat(),600)?;
+    let catalog=tracked_reply(f,103,&proto::f_str(1,"N/A"),503)?;
+    if proto::parse(&catalog).is_none(){return Err("Chưa xác minh được thư viện sau khi xóa".into());}
+    let files=proto::find_paths(&catalog);
+    if files.iter().any(|p|p==path){return Err("Thiết bị vẫn còn tệp sau khi xóa".into());}
+    Ok(files)
+}
+
+#[cfg(test)]
+mod removal_tests{
+    use super::*;
+    #[test]
+    fn only_unique_writable_user_media_can_be_removed(){
+        let path="/mnt/data/media/clip.mp4";
+        let entry=|kind,readonly|proto::f_bytes(kind,&[proto::f_str(1,path),proto::f_varint(4,readonly)].concat());
+        assert!(removable(&entry(1,0),path));
+        assert!(!removable(&entry(1,1),path));
+        assert!(!removable(&entry(2,0),path));
+        assert!(!removable(&[entry(1,0),entry(2,0)].concat(),path));
+    }
+}

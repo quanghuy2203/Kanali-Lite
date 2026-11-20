@@ -88,7 +88,7 @@ impl Drop for Wallpaper {
 }
 
 fn engine() -> Result<PathBuf, String> {
-    super::workshop::libraries()?
+    super::library::libraries()?
         .into_iter()
         .flat_map(|lib| {
             ["wallpaper64.exe", "wallpaper32.exe"]
@@ -96,6 +96,75 @@ fn engine() -> Result<PathBuf, String> {
         })
         .find(|p| p.is_file())
         .ok_or("Chưa tìm thấy Wallpaper Engine trong các thư viện Steam".into())
+}
+
+fn launch_engine() -> Result<(), String> {
+    let exe = engine()?;
+    let root = exe.parent().ok_or("Thiếu thư mục Wallpaper Engine")?;
+    // Native Steam launcher opens the wallpaper chooser using the user's existing licence.
+    let steam = steamlocate::SteamDir::locate().map_err(|e| e.to_string())?;
+    Command::new(steam.path().join("steam.exe"))
+        .current_dir(root)
+        .args(["-applaunch", "431960"])
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+fn show_engine_browser(exe: &Path) -> Result<(), String> {
+    let parent = exe.parent().ok_or("Thiếu thư mục ứng dụng")?;
+    if let Some(ui) = ["bin/wallpaperui.exe", "bin/ui32.exe", "wallpaperui.exe"]
+        .iter()
+        .map(|n| parent.join(n))
+        .find(|p| p.is_file())
+    {
+        Command::new(ui)
+            .current_dir(parent)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    } else {
+        launch_engine()
+    }
+}
+
+pub fn open_engine_ui() -> Result<(), String> {
+    if let Some(exe) = running_engine() {
+        show_engine_browser(&exe)
+    } else {
+        launch_engine()
+    }
+}
+
+fn running_engine() -> Option<PathBuf> {
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "PascalCase")]
+    struct Process {
+        executable_path: Option<String>,
+    }
+    let com = wmi::COMLibrary::new().ok()?;
+    let db = wmi::WMIConnection::new(com.into()).ok()?;
+    let known = engine().ok()?;
+    let parent = known.parent()?.canonicalize().ok()?;
+    let rows:Vec<Process>=db.raw_query("SELECT ExecutablePath FROM Win32_Process WHERE Name='wallpaper32.exe' OR Name='wallpaper64.exe'").ok()?;
+    rows.into_iter()
+        .filter_map(|r| r.executable_path)
+        .map(PathBuf::from)
+        .find(|p| p.parent().and_then(|v| v.canonicalize().ok()).as_ref() == Some(&parent))
+}
+
+fn start_engine() -> Result<PathBuf, String> {
+    if let Some(exe) = running_engine() {
+        return Ok(exe);
+    }
+    launch_engine()?;
+    for _ in 0..20 {
+        thread::sleep(Duration::from_millis(750));
+        if let Some(exe) = running_engine() {
+            return Ok(exe);
+        }
+    }
+    Err("Đã yêu cầu Steam mở Wallpaper Engine. Kiểm tra trạng thái khởi động trong Steam rồi kết nối lại.".into())
 }
 
 pub fn import(source: PathBuf, project: bool) -> Result<String, String> {
@@ -141,7 +210,7 @@ pub fn import(source: PathBuf, project: bool) -> Result<String, String> {
         {
             "video" => (),
             "scene" | "web" => {
-                let engine = engine()?;
+                let engine = start_engine()?;
                 let window = format!("Kanali-Panorama-{}", config::now_ms());
                 let result = Command::new(&engine)
                     .args(["-control", "openWallpaper", "-file"])
@@ -213,7 +282,9 @@ pub struct ActiveWallpaper {
 
 pub fn active_wallpaper(monitor: u32) -> Result<ActiveWallpaper, String> {
     use std::process::Stdio;
-    let mut child = Command::new(engine()?)
+    let exe = start_engine()?;
+    show_engine_browser(&exe)?;
+    let mut child = Command::new(exe)
         .args(["-control", "getWallpaper", "-monitor", &monitor.to_string()])
         .creation_flags(0x08000000)
         .stdout(Stdio::piped())

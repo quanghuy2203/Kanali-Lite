@@ -7,7 +7,8 @@
 
 mod daemon;
 mod media;
-mod workshop;
+mod giphy;
+mod library;
 mod presets;
 mod telemetry;
 mod sensors;
@@ -36,8 +37,9 @@ fn main() {
         let _ = std::fs::remove_file(exe.with_extension("exe.old"));
     }
 
-    if has("--workshop") || has("--giphy") {
-        if let Err(error) = workshop::browse(has("--giphy")) { rfd::MessageDialog::new().set_title("Steam Workshop").set_description(error).show(); }
+    if has("--library") {library::run();return;}
+    if has("--giphy") {
+        if let Err(error) = giphy::browse() { rfd::MessageDialog::new().set_title("GIPHY").set_description(error).show(); }
         return;
     }
 

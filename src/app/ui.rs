@@ -41,7 +41,7 @@ pub fn run() {
     );
 }
 
-fn setup(ctx: &egui::Context) {
+pub(super) fn setup(ctx: &egui::Context) {
     // Font Segoe UI có đủ dấu tiếng Việt; không có thì dùng font mặc định.
     if let Ok(bytes) = std::fs::read(r"C:\Windows\Fonts\segoeui.ttf") {
         let mut fonts = egui::FontDefinitions::default();
@@ -67,6 +67,9 @@ fn setup(ctx: &egui::Context) {
     v.selection.stroke = Stroke::new(1.0_f32, ACCENT);
     ctx.set_visuals(v);
     ctx.style_mut(|s| {
+        s.text_styles.insert(egui::TextStyle::Body,egui::FontId::proportional(15.0));
+        s.text_styles.insert(egui::TextStyle::Button,egui::FontId::proportional(15.0));
+        s.spacing.interact_size.y=32.;
         s.spacing.item_spacing = vec2(8.0, 8.0);
         s.spacing.button_padding = vec2(14.0, 7.0);
     });
@@ -201,11 +204,8 @@ struct App {
     right_slot: bool,
     wallpaper:Option<crate::media::ActiveWallpaper>,
     wallpaper_query:Option<std::sync::mpsc::Receiver<Result<crate::media::ActiveWallpaper,String>>>,
-    wallpaper_library: Vec<(String,std::path::PathBuf)>,
-    library_query:Option<std::sync::mpsc::Receiver<Result<Vec<(String,std::path::PathBuf)>,String>>>,
     wallpaper_monitor:u32,
     wallpaper_note:String,
-    workshop_id: Option<u64>,
     gif_id:Option<String>,
     assets_ready: std::sync::mpsc::Receiver<()> ,
     cfg: Config,
@@ -221,7 +221,7 @@ impl App {
         let state: State = config::load_opt(&config::state_path()).unwrap_or_default();
         let (tx, assets_ready)=std::sync::mpsc::channel();
         std::thread::spawn(move || { crate::presets::cache(); let _=tx.send(()); });
-        Self { sampler:Default::default(), readings:Default::default(), draft:cfg.layout.clone(), full:cfg.playing.clone(), carousel: cfg.playing.clone(), clips:Default::default(), right_slot:false, wallpaper:None,wallpaper_query:None,library_query:None,wallpaper_library:Vec::new(),wallpaper_monitor:0,wallpaper_note:String::new(),workshop_id:None, gif_id:None, assets_ready, media_job: None, media_note: String::new(), page: Page::Home, display_tab: false, cfg, state, last_read: Instant::now(), autostart: autostart::is_enabled(), notice: String::new() }
+        Self { sampler:Default::default(), readings:Default::default(), draft:cfg.layout.clone(), full:cfg.playing.clone(), carousel: cfg.playing.clone(), clips:Default::default(), right_slot:false, wallpaper:None,wallpaper_query:None,wallpaper_monitor:0,wallpaper_note:String::new(), gif_id:None, assets_ready, media_job: None, media_note: String::new(), page: Page::Home, display_tab: false, cfg, state, last_read: Instant::now(), autostart: autostart::is_enabled(), notice: String::new() }
     }
 
     fn save(&self) {
@@ -385,14 +385,6 @@ impl App {
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        if let Some(rx)=&self.library_query {
-            match rx.try_recv(){
-                Ok(Ok(items))=>{ self.wallpaper_note=format!("Thư viện Wallpaper Engine: {} dự án",items.len());self.wallpaper_library=items;self.library_query=None; }
-                Ok(Err(e))=>{ self.wallpaper_note=e;self.library_query=None; }
-                Err(std::sync::mpsc::TryRecvError::Disconnected)=>{self.library_query=None;self.wallpaper_note="Đọc thư viện bị gián đoạn".into();}
-                _=>()
-            }
-        }
         if let Some(rx)=&self.wallpaper_query {
             match rx.try_recv() {
                 Ok(Ok(active)) => {self.wallpaper=Some(active); self.wallpaper_note.clear();self.wallpaper_query=None;}
@@ -427,7 +419,6 @@ impl eframe::App for App {
                 let keys=panorama::METRICS.iter().map(|(k,_)|k.to_string()).collect::<Vec<_>>();
                 self.readings=self.sampler.readings(&keys);
             } else {self.sampler=Default::default();}
-            self.workshop_id = crate::workshop::selected();
             self.gif_id=config::load_opt(&config::data_dir().join("giphy-item.json"));
             self.last_read = Instant::now();
         }
