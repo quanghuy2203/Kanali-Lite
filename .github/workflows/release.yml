@@ -1,0 +1,47 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    env:
+      # Gắn tên kho vào chương trình để tự cập nhật biết tìm bản mới ở đâu.
+      KANALI_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Kiểm tra tag khớp phiên bản trong Cargo.toml
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}".TrimStart('v')
+          $ver = (Select-String -Path Cargo.toml -Pattern '^version = "(.*)"' | Select-Object -First 1).Matches.Groups[1].Value
+          if ($tag -ne $ver) { throw "Tag v$tag không khớp version $ver trong Cargo.toml" }
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build
+        run: cargo build --release
+
+      - name: Đóng gói và băm SHA-256
+        shell: pwsh
+        run: |
+          Copy-Item target/release/kanali.exe kanali-windows-x64.exe
+          Copy-Item target/release/kanali-rs.exe kanali-rs-cli-windows-x64.exe
+          $h = (Get-FileHash kanali-windows-x64.exe -Algorithm SHA256).Hash.ToLower()
+          "$h  kanali-windows-x64.exe" | Out-File -Encoding ascii kanali-windows-x64.exe.sha256
+
+      - name: Tạo bản phát hành
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            kanali-windows-x64.exe
+            kanali-windows-x64.exe.sha256
+            kanali-rs-cli-windows-x64.exe
+          generate_release_notes: true

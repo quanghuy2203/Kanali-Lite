@@ -1,0 +1,44 @@
+[package]
+name = "kanali-rs"
+version = "0.2.0"
+edition = "2021"
+description = "Điều khiển màn hình Tryx Panorama: nhẹ RAM, có giao diện và tự cập nhật"
+
+[features]
+default = ["gui"]
+gui = ["dep:eframe", "dep:tao", "dep:tray-icon"]
+
+[lib]
+name = "kanali_rs"
+path = "src/lib.rs"
+
+# Công cụ dòng lệnh (có console)
+[[bin]]
+name = "kanali-rs"
+path = "src/cli.rs"
+
+# Ứng dụng chính: khay hệ thống + giao diện
+[[bin]]
+name = "kanali"
+path = "src/app/main.rs"
+required-features = ["gui"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+ureq = { version = "2.10", features = ["json"] }
+sha2 = "0.10"
+eframe = { version = "0.29", default-features = false, features = ["glow", "default_fonts"], optional = true }
+tao = { version = "0.30", optional = true }
+tray-icon = { version = "0.19", optional = true }
+
+[dependencies.windows]
+version = "0.58"
+features = ["Win32_Foundation", "Win32_Devices_DeviceAndDriverInstallation"]
+
+[profile.release]
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true

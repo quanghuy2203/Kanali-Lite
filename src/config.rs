@@ -1,0 +1,129 @@
+//! Cấu hình, trạng thái và lệnh trao đổi giữa tiến trình nền và giao diện (qua file JSON).
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use std::{
+    fs::{self, File, OpenOptions},
+    io,
+    os::windows::fs::OpenOptionsExt,
+    path::{Path, PathBuf},
+    thread,
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+};
+
+pub const DEFAULT_POWERON: &str = "default_poweron.mp4.h264_2240x1080";
+pub const DEFAULT_STANDBY: &str = "default_standby.mp4.h264_2240x1080";
+
+pub fn now_ms() -> u64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
+}
+
+pub fn data_dir() -> PathBuf {
+    let base = std::env::var_os("APPDATA").map(PathBuf::from).unwrap_or_else(std::env::temp_dir);
+    let d = base.join("kanali-rs");
+    let _ = fs::create_dir_all(&d);
+    d
+}
+pub fn config_path() -> PathBuf { data_dir().join("config.json") }
+pub fn state_path() -> PathBuf { data_dir().join("state.json") }
+fn cmd_path() -> PathBuf { data_dir().join("cmd.json") }
+
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
+#[serde(default)]
+pub struct Config {
+    pub playing: String,
+    pub poweron: String,
+    pub standby: String,
+    pub level: u64,
+    pub autostart: bool,
+    pub check_updates: bool,
+    /// Kho GitHub dạng "owner/repo". Để trống thì dùng giá trị gắn lúc build.
+    pub repo: String,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            playing: "download_46.mp4.h264_2240x1080".into(),
+            poweron: DEFAULT_POWERON.into(),
+            standby: DEFAULT_STANDBY.into(),
+            level: 67,
+            autostart: false,
+            check_updates: true,
+            repo: String::new(),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Default, Debug)]
+#[serde(default)]
+pub struct DeviceInfo {
+    pub os: String,
+    pub kernel: String,
+    pub model: String,
+    pub firmware: String,
+    pub serial: String,
+    pub resolution: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Default, Debug)]
+#[serde(default)]
+pub struct UpdateInfo {
+    pub available: bool,
+    pub latest: String,
+    pub notes: String,
+    pub url: String,
+    pub status: String,
+    pub progress: f32,
+    pub busy: bool,
+}
+
+#[derive(Serialize, Deserialize, Clone, Default, Debug)]
+#[serde(default)]
+pub struct State {
+    pub version: String,
+    pub connected: bool,
+    pub message: String,
+    pub info: Option<DeviceInfo>,
+    pub files: Vec<String>,
+    pub update: UpdateInfo,
+    pub updated_ms: u64,
+}
+
+pub fn load_opt<T: DeserializeOwned>(path: &Path) -> Option<T> {
+    fs::read(path).ok().and_then(|b| serde_json::from_slice(&b).ok())
+}
+
+pub fn save<T: Serialize>(path: &Path, v: &T) -> io::Result<()> {
+    let tmp = path.with_extension("tmp");
+    fs::write(&tmp, serde_json::to_vec_pretty(v).map_err(io::Error::other)?)?;
+    fs::rename(&tmp, path)
+}
+
+#[derive(Serialize, Deserialize)]
+struct Cmd {
+    action: String,
+}
+
+/// Giao diện gửi lệnh ("check", "update", "refresh") cho tiến trình nền.
+pub fn send_command(action: &str) {
+    let _ = save(&cmd_path(), &Cmd { action: action.to_string() });
+}
+
+pub fn take_command() -> Option<String> {
+    let p = cmd_path();
+    let c: Cmd = load_opt(&p)?;
+    let _ = fs::remove_file(&p);
+    Some(c.action)
+}
+
+/// Khóa độc quyền theo tên: giữ File này sống thì tiến trình khác không lấy được.
+pub fn acquire_lock(name: &str, wait: Duration) -> Option<File> {
+    let p = data_dir().join(name);
+    let start = Instant::now();
+    loop {
+        match OpenOptions::new().write(true).create(true).share_mode(0).open(&p) {
+            Ok(f) => return Some(f),
+            Err(_) if start.elapsed() < wait => thread::sleep(Duration::from_millis(200)),
+            Err(_) => return None,
+        }
+    }
+}
