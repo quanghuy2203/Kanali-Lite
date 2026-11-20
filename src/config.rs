@@ -28,7 +28,27 @@ fn cmd_path() -> PathBuf { data_dir().join("cmd.json") }
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
 #[serde(default)]
+pub struct Layout {
+    pub split: bool,
+    pub left: String,
+    pub right: String,
+    pub loop_mode: u64,
+    pub metrics: Vec<String>,
+    pub dark_text: bool,
+    pub alignment: u64,
+    pub font_size: u64,
+    pub enabled: bool,
+}
+impl Default for Layout {
+    fn default() -> Self {
+        Self { split:false, left:String::new(), right:String::new(), loop_mode:0, metrics:Vec::new(), dark_text:false, alignment:1, font_size:32, enabled:true }
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
+#[serde(default)]
 pub struct Config {
+    pub layout: Layout,
     pub playing: String,
     pub poweron: String,
     pub standby: String,
@@ -42,6 +62,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
+            layout: Layout::default(),
             playing: "download_46.mp4.h264_2240x1080".into(),
             poweron: DEFAULT_POWERON.into(),
             standby: DEFAULT_STANDBY.into(),

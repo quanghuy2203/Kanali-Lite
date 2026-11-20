@@ -7,6 +7,10 @@
 
 mod daemon;
 mod media;
+mod workshop;
+mod presets;
+mod telemetry;
+mod sensors;
 mod ui;
 
 use std::{env, process::Command, time::Duration};
@@ -30,6 +34,11 @@ fn main() {
     // Dọn file chương trình cũ còn sót sau lần cập nhật trước.
     if let Ok(exe) = env::current_exe() {
         let _ = std::fs::remove_file(exe.with_extension("exe.old"));
+    }
+
+    if has("--workshop") || has("--giphy") {
+        if let Err(error) = workshop::browse(has("--giphy")) { rfd::MessageDialog::new().set_title("Steam Workshop").set_description(error).show(); }
+        return;
     }
 
     if has("--ui") {

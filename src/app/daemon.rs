@@ -101,6 +101,7 @@ fn session(sh: &Arc<Shared>) -> Result<(), String> {
         s.files = files;
     });
 
+    let mut sampler=crate::telemetry::Sampler::default();
     let mut last_hb = Instant::now();
     loop {
         thread::sleep(Duration::from_millis(400));
@@ -125,16 +126,18 @@ fn session(sh: &Arc<Shared>) -> Result<(), String> {
                 sh.with(|s| s.media_status = format!("Không gửi được {name}: {e}. Có thể chọn lại tệp nguồn."));
                 return Err(e);
             }
+            device::apply_play(&mut f,&cfg)?;
         }
         if sh.refresh.swap(false, Ordering::Relaxed) {
             let files = device::fetch_files(&mut f)?;
+            device::apply_play(&mut f,&cfg)?;
             sh.with(|s| s.files = files);
         }
         if let Some(new) = config::load_opt::<Config>(&config::config_path()) {
             if new.playing != cfg.playing
                 || new.poweron != cfg.poweron
                 || new.standby != cfg.standby
-                || new.level != cfg.level
+                || new.level != cfg.level || new.layout != cfg.layout
             {
                 device::apply_play(&mut f, &new)?;
             }
@@ -142,6 +145,7 @@ fn session(sh: &Arc<Shared>) -> Result<(), String> {
         }
         if last_hb.elapsed() >= Duration::from_secs(2) {
             device::heartbeat(&mut f)?;
+            sampler.publish(&mut f,&cfg.layout)?;
             last_hb = Instant::now();
         }
     }

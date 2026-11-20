@@ -30,9 +30,17 @@ Từ v0.2.2, bộ cập nhật tra lượt build thành công của nhánh main 
 
 Chức năng nhập và tạo xem trước cần FFmpeg cho Windows có libx264. Đặt `ffmpeg.exe` cạnh Kanali hoặc thêm vào PATH. Chọn **Thêm video / GIF** để chuyển mã thành H.264 cho PANORAMA. Giữ giao diện mở trong lúc chuyển mã. Khi tệp đã vào hàng chờ, tiến trình nền gửi theo khối qua USB, kiểm tra phản hồi và đọc lại danh sách trên màn hình. Bấm vào video trong thư viện để phát.
 
-Chọn **Nhập từ Wallpaper Engine** và mở `project.json` trong thư mục dự án hoặc `steamapps/workshop/content/431960/<id>`. Dự án Video dùng tệp nguồn. Dự án Web và Scene cần Wallpaper Engine đang chạy. Kanali mở dự án trong một cửa sổ riêng và ghi 15 giây để phát lặp; hãy giữ cửa sổ này hiển thị trong lúc ghi. Nếu Steam nằm ở thư viện khác, chọn wallpaper64.exe khi được hỏi.
+### Preset và Customization
 
-Khi chọn video, giao diện hiện tối đa bốn giây xem trước đã lưu trên máy. Với video có sẵn trên màn hình, chọn **Ghép video nguồn để xem trước** và chỉ tới bản sao trên máy. Thư viện USB hiện chỉ trả về thông tin tệp.
+Preset có các thẻ xếp lớp. Dùng mũi tên để xem, bấm **Lưu vào màn hình** để áp dụng. Lite lấy ảnh của sáu preset mặc định từ bản KANALI đã cài ở thư mục chuẩn của Windows. Video nhập qua Lite dùng preview tạo từ chính video. Với tệp chỉ có trên thiết bị, có thể ghép bản nguồn trên PC. Thiết bị cung cấp danh sách tệp qua USB.
+
+Trong **Customization**, chọn Full Screen hoặc Screen Splitting. Với màn hình chia đôi, bấm từng ô và chọn media cho bên đó trước khi lưu. Chế độ phát gồm Single, Loop và Shuffle. Lớp thông tin hỗ trợ CPU Usage, Memory Utilization và Date & Time, với màu chữ, cỡ chữ và căn lề. Các mục nhiệt độ, xung nhịp, công suất và GPU lấy từ cảm biến do LibreHardwareMonitor công bố qua WMI. Chọn tối đa ba mục; dấu gạch ngang nghĩa là chưa có số đo.
+
+### Steam Workshop
+
+Mở **Customization → Steam Workshop**. Đăng nhập trên trang Steam bằng tài khoản đang chạy trong Steam Desktop, tìm wallpaper và bấm **Subscribe**. Quay về Lite rồi bấm **Nhập mục**. Lite tìm đúng ID trong các thư viện Steam và chờ Steam tải xong. Cần Microsoft Edge WebView2, Steam và Wallpaper Engine. Cửa sổ Workshop chạy riêng và giải phóng WebView khi đóng.
+
+Dự án Video dùng tệp nguồn. Web và Scene cần Wallpaper Engine đang chạy. Lite mở dự án trong cửa sổ riêng và ghi 15 giây để phát lặp; giữ cửa sổ này hiển thị trong lúc ghi.
 
 ## Dữ liệu
 Cấu hình và trạng thái nằm ở `%APPDATA%\kanali-rs\` (`config.json`, `state.json`). Nếu chương trình lỗi, xem `crash.log` trong thư mục đó.

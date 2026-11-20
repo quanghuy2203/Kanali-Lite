@@ -81,22 +81,9 @@ impl Drop for Wallpaper {
 }
 
 fn engine() -> Result<PathBuf, String> {
-    if let Some(root) = std::env::var_os("ProgramFiles(x86)") {
-        let path =
-            PathBuf::from(root).join("Steam/steamapps/common/wallpaper_engine/wallpaper64.exe");
-        if path.is_file() {
-            return Ok(path);
-        }
-    }
-    rfd::FileDialog::new()
-        .set_title("Chọn wallpaper64.exe trong thư mục Wallpaper Engine")
-        .add_filter("Wallpaper Engine", &["exe"])
-        .pick_file()
-        .filter(|p| {
-            p.file_name()
-                .is_some_and(|n| n.eq_ignore_ascii_case("wallpaper64.exe"))
-        })
-        .ok_or("Chưa chọn Wallpaper Engine".into())
+    super::workshop::libraries()?.into_iter()
+        .map(|lib| lib.join("common/wallpaper_engine/wallpaper64.exe"))
+        .find(|p| p.is_file()).ok_or("Chưa tìm thấy Wallpaper Engine trong các thư viện Steam".into())
 }
 
 pub fn import(source: PathBuf, project: bool) -> Result<String, String> {

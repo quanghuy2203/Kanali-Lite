@@ -8,10 +8,13 @@ use kanali_rs::{
     update,
 };
 
-const BG: Color32 = Color32::from_rgb(16, 17, 16);
-const CARD: Color32 = Color32::from_rgb(30, 31, 29);
+#[path="panorama.rs"]
+mod panorama;
+
+const BG: Color32 = Color32::from_rgb(29, 32, 37);
+const CARD: Color32 = Color32::from_rgb(37, 40, 46);
 const BORDER: Color32 = Color32::from_rgb(58, 60, 55);
-const ACCENT: Color32 = Color32::from_rgb(205, 246, 55);
+const ACCENT: Color32 = Color32::from_rgb(225, 248, 72);
 const DIM: Color32 = Color32::from_rgb(172, 176, 165);
 const GOOD: Color32 = Color32::from_rgb(52, 211, 153);
 const WARN: Color32 = Color32::from_rgb(251, 191, 36);
@@ -24,7 +27,7 @@ pub fn run() {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("Kanali Lite")
-            .with_inner_size([940.0, 620.0])
+            .with_inner_size([1150.0, 760.0])
             .with_min_inner_size([700.0, 420.0]),
         ..Default::default()
     };
@@ -128,16 +131,6 @@ fn file_of(path: &str) -> &str {
     path.rsplit('/').next().unwrap_or(path)
 }
 
-fn group_of(path: &str) -> &'static str {
-    if path.contains("/media/") {
-        "Video của bạn"
-    } else if path.contains("/preset/") {
-        "Mẫu có sẵn"
-    } else {
-        "Mặc định"
-    }
-}
-
 /// "2026-11-20_00-38-41-483.mp4.h264_2240x1080" -> "2026-11-20  00:38:41"
 fn label_of(file: &str) -> String {
     let base = file.split(".mp4").next().unwrap_or(file);
@@ -187,6 +180,7 @@ impl Page {
 }
 
 struct Clip {
+    dimensions:[usize;2],
     frames: Vec<u8>,
     texture: egui::TextureHandle,
     start: Instant,
@@ -198,7 +192,14 @@ struct App {
     display_tab: bool,
     media_job: Option<std::sync::mpsc::Receiver<Result<String,String>>>,
     media_note: String,
-    preview: Option<(String, Option<Clip>)>,
+    clips: std::collections::HashMap<String,Option<Clip>>,
+    carousel: String,
+    draft: config::Layout,
+    full: String,
+    right_slot: bool,
+    workshop_id: Option<u64>,
+    gif_id:Option<String>,
+    assets_ready: std::sync::mpsc::Receiver<()> ,
     cfg: Config,
     state: State,
     last_read: Instant,
@@ -210,7 +211,9 @@ impl App {
     fn new() -> Self {
         let cfg: Config = config::load_opt(&config::config_path()).unwrap_or_default();
         let state: State = config::load_opt(&config::state_path()).unwrap_or_default();
-        Self { media_job: None, media_note: String::new(), preview: None, page: Page::Home, display_tab: false, cfg, state, last_read: Instant::now(), autostart: autostart::is_enabled(), notice: String::new() }
+        let (tx, assets_ready)=std::sync::mpsc::channel();
+        std::thread::spawn(move || { crate::presets::cache(); let _=tx.send(()); });
+        Self { draft:cfg.layout.clone(), full:cfg.playing.clone(), carousel: cfg.playing.clone(), clips:Default::default(), right_slot:false, workshop_id:None, gif_id:None, assets_ready, media_job: None, media_note: String::new(), page: Page::Home, display_tab: false, cfg, state, last_read: Instant::now(), autostart: autostart::is_enabled(), notice: String::new() }
     }
 
     fn save(&self) {
@@ -261,13 +264,9 @@ impl App {
         });
     }
 
-    fn pick_media(&mut self, project: bool, poster_for: Option<String>) {
+    fn pick_media(&mut self, poster_for: Option<String>) {
         let picker = rfd::FileDialog::new();
-        let source = if project {
-            picker.set_title("Wallpaper Engine · Chọn project.json trong thư mục Workshop hoặc myprojects").add_filter("Wallpaper Engine", &["json"]).pick_file()
-        } else {
-            picker.add_filter("Video / GIF", &["mp4","mkv","mov","webm","avi","gif","m4v","h264"]).pick_file()
-        };
+        let source = picker.add_filter("Video / GIF", &["mp4","mkv","mov","webm","avi","gif","m4v","h264"]).pick_file();
         let Some(source) = source else { return; };
         let (tx, rx) = std::sync::mpsc::channel();
         self.media_job = Some(rx);
@@ -275,105 +274,9 @@ impl App {
         std::thread::spawn(move || {
             let result = match poster_for {
                 Some(name) => crate::media::make_poster(&source, &name).map(|_| "Đã lưu ảnh xem trước".into()),
-                None => crate::media::import(source, project),
+                None => crate::media::import(source, false),
             };
             let _ = tx.send(result);
-        });
-    }
-
-    fn preview_panel(&mut self, ui: &mut egui::Ui) {
-        let name = &self.cfg.playing;
-        if self.preview.as_ref().map(|(n, _)| n) != Some(name) {
-            let frame_size = 240*116*3;
-            let image = std::fs::read(crate::media::poster(name)).ok()
-                .filter(|b| !b.is_empty() && b.len() <= 8*frame_size && b.len() % frame_size == 0)
-                .map(|frames| {
-                    let texture = ui.ctx().load_texture("media-preview", egui::ColorImage::from_rgb([240,116], &frames[..frame_size]), Default::default());
-                    Clip { frames, texture, start: Instant::now(), current: 0 }
-                });
-            self.preview = Some((name.clone(), image));
-        }
-        ui.horizontal_wrapped(|ui| {
-            if let Some((_, Some(clip))) = &mut self.preview {
-                let size = 240*116*3;
-                let count = clip.frames.len() / size;
-                if count > 1 {
-                    let elapsed = clip.start.elapsed().as_millis() as usize;
-                    let index = (elapsed / 500) % count;
-                    if index != clip.current {
-                        clip.texture.set(egui::ColorImage::from_rgb([240,116], &clip.frames[index*size..(index+1)*size]), Default::default());
-                        clip.current = index;
-                    }
-                    ui.ctx().request_repaint_after(Duration::from_millis((500 - elapsed % 500) as u64));
-                }
-                ui.image((clip.texture.id(), vec2(180.0,87.0)));
-            }
-            ui.vertical(|ui| {
-                ui.strong(label_of(&self.cfg.playing));
-                ui.small(&self.cfg.playing);
-                if self.preview.as_ref().is_some_and(|p| p.1.is_none()) {
-                    ui.small("Chưa có ảnh xem trước trên máy.");
-                    if ui.add_enabled(self.media_job.is_none(), egui::Button::new("Ghép video nguồn để xem trước")).clicked() {
-                        self.pick_media(false, Some(self.cfg.playing.clone()));
-                    }
-                }
-            });
-        });
-    }
-
-    fn video_card(&mut self, ui: &mut egui::Ui) {
-        card(ui, |ui| {
-            title(ui, "Video đã chọn");
-            self.preview_panel(ui);
-            ui.separator();
-            ui.horizontal_wrapped(|ui| {
-                if ui.add_enabled(self.media_job.is_none(), egui::Button::new("Thêm video / GIF")).clicked() { self.pick_media(false, None); }
-                if ui.add_enabled(self.media_job.is_none(), egui::Button::new("Nhập từ Wallpaper Engine")).on_hover_text("Chọn project.json. Web và Scene được ghi thành clip 15 giây.").clicked() { self.pick_media(true, None); }
-            });
-            if !self.media_note.is_empty() { ui.label(&self.media_note); }
-            if !self.state.media_status.is_empty() { ui.label(&self.state.media_status); }
-            if self.state.files.is_empty() {
-                ui.label(RichText::new("Chưa có danh sách video (chưa kết nối màn hình).").color(DIM));
-            }
-            let mut chosen: Option<String> = None;
-            egui::ScrollArea::vertical().max_height(250.0).show(ui, |ui| {
-                for group in ["Video của bạn", "Mẫu có sẵn", "Mặc định"] {
-                    let mut items =
-                        self.state.files.iter().filter(|p| group_of(p) == group).peekable();
-                    if items.peek().is_none() {
-                        continue;
-                    }
-                    ui.label(RichText::new(group).small().color(DIM));
-                    ui.horizontal_wrapped(|ui| {
-                        let gap = ui.spacing().item_spacing.x;
-                        let width = ui.available_width();
-                        let columns = ((width + gap) / (170.0 + gap)).floor().max(1.0);
-                        let tile = ((width + gap) / columns - gap).floor();
-                        for path in items {
-                            let file = file_of(path);
-                            let active = self.cfg.playing == file;
-                            let color = if active { ACCENT } else { BORDER };
-                            let label = label_of(file);
-                            let button = egui::Button::new(short(&label, 22))
-                                .fill(if active { Color32::from_rgb(52, 61, 34) } else { BG })
-                                .stroke(Stroke::new(1.0_f32, color));
-                            if ui.add_sized([tile, 52.0], button).on_hover_text(file).clicked() {
-                                chosen = Some(file.to_owned());
-                            }
-                        }
-                    });
-                    ui.add_space(6.0);
-                }
-            });
-            if let Some(f) = chosen {
-                self.cfg.playing = f;
-                self.save();
-            }
-            ui.horizontal(|ui| {
-                if ui.button("Làm mới danh sách").clicked() {
-                    config::send_command("refresh");
-                }
-            });
         });
     }
 
@@ -478,7 +381,7 @@ impl eframe::App for App {
             match job.try_recv() {
                 Ok(result) => {
                     self.media_note = result.unwrap_or_else(|e| format!("Lỗi: {e}"));
-                    self.preview = None;
+                    self.clips.clear();
                     self.media_job = None;
                 }
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {
@@ -488,6 +391,7 @@ impl eframe::App for App {
                 Err(std::sync::mpsc::TryRecvError::Empty) => (),
             }
         }
+        if self.assets_ready.try_recv().is_ok() { self.clips.clear(); }
         if self.last_read.elapsed() >= Duration::from_millis(1000) {
             if let Some(s) = config::load_opt::<State>(&config::state_path()) {
                 if s.update.restart && s.version == env!("CARGO_PKG_VERSION") && config::now_ms().saturating_sub(s.updated_ms) < 7000 {
@@ -495,12 +399,14 @@ impl eframe::App for App {
                 }
                 self.state = s;
             }
+            self.workshop_id = crate::workshop::selected();
+            self.gif_id=config::load_opt(&config::data_dir().join("giphy-item.json"));
             self.last_read = Instant::now();
         }
 
         egui::SidePanel::left("navigation")
             .resizable(false)
-            .exact_width(156.0)
+            .exact_width(if ctx.screen_rect().width() >= 1050.0 { 202.0 } else { 138.0 })
             .frame(egui::Frame::none().fill(ACCENT).inner_margin(14.0))
             .show(ctx, |ui| {
                 ui.add_space(10.0);
@@ -522,7 +428,7 @@ impl eframe::App for App {
         egui::CentralPanel::default()
             .frame(egui::Frame::none().fill(BG).inner_margin(Margin::same(16.0)))
             .show(ctx, |ui| {
-                self.header(ui);
+                if self.page != Page::Panorama {self.header(ui);}
                 egui::ScrollArea::vertical().id_salt(self.page).show(ui, |ui| {
                     self.status_card(ui);
                     match self.page {
@@ -540,12 +446,7 @@ impl eframe::App for App {
                             self.device_card(ui);
                         }
                         Page::Panorama => {
-                            ui.horizontal(|ui| {
-                                ui.selectable_value(&mut self.display_tab, false, "Thư viện video");
-                                ui.selectable_value(&mut self.display_tab, true, "Hiển thị");
-                            });
-                            if self.display_tab { self.display_card(ui); }
-                            else { self.video_card(ui); }
+                            self.panorama(ui);
                         }
                         Page::Settings => {
                             self.settings_card(ui);

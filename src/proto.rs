@@ -62,16 +62,37 @@ pub fn msg_list_files() -> Vec<u8> { cat(&[hdr_empty(), f_bytes(103, &f_str(1, "
 pub fn msg_commit() -> Vec<u8> { cat(&[hdr_empty(), f_bytes(201, &[])]) }
 pub fn msg_hello() -> Vec<u8> { cat(&[hdr_empty(), f_bytes(10, &f_str(1, "hello?"))]) }
 pub fn msg_play(poweron: &str, standby: &str, playing: &str, level: u64) -> Vec<u8> {
+    configured_play(poweron, standby, playing, level, &crate::config::Layout::default())
+}
+
+pub fn configured_play(poweron: &str, standby: &str, playing: &str, level: u64, layout: &crate::config::Layout) -> Vec<u8> {
+    let mut work = f_str(3,playing);
+    if layout.split { work.extend(cat(&[f_varint(1,1),f_str(4,&layout.left),f_str(5,&layout.right)])); }
+    if layout.loop_mode != 0 {work.extend(f_varint(2,layout.loop_mode.min(2)));}
     let body = cat(&[
         f_bytes(1, &f_str(1, poweron)),
         f_bytes(2, &cat(&[f_varint(1, 1), f_str(2, standby)])),
-        f_bytes(3, &f_str(3, playing)),
-        f_bytes(5, &cat(&[f_varint(1, 1), f_varint(2, level)])),
+        f_bytes(3, &work),
+        f_bytes(5, &cat(&[f_varint(1, layout.enabled as u64), f_varint(2, level)])),
     ]);
     cat(&[hdr_empty(), f_bytes(200, &body)])
 }
 
 // ---------- giải mã protobuf không cần schema, in dạng cây ----------
+
+fn overlay_group(layout: &crate::config::Layout) -> Vec<u8> {
+    let mut group = cat(&[f_varint(1,1),f_varint(2,24),f_varint(3,24),f_varint(4,1000),f_varint(5,350),f_varint(6,layout.alignment.clamp(1,3))]);
+    for (i, metric) in layout.metrics.iter().take(3).enumerate() {
+        let label = cat(&[f_varint(1,i as u64+1),f_varint(2,i as u64),f_str(8,"roboto-regular"),f_varint(9,layout.font_size.clamp(18,64)),f_varint(10,if layout.dark_text {0} else {0xffffff}),f_str(11,metric)]);
+        group.extend(f_bytes(8,&label));
+    }
+    group
+}
+
+pub fn overlay(layout: &crate::config::Layout) -> Vec<u8> {
+    if layout.metrics.is_empty() {return msg_commit();}
+    cat(&[hdr_empty(),f_bytes(201,&f_bytes(1,&overlay_group(layout)))])
+}
 
 fn varint(b: &[u8], i: &mut usize) -> Option<u64> {
     let (mut v, mut s) = (0u64, 0u32);
@@ -246,6 +267,25 @@ mod tests {
     fn h(s: &str) -> Vec<u8> {
         (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap()).collect()
     }
+    #[test]
+    fn split_layout_and_metrics() {
+        let layout = crate::config::Layout { split:true, left:"left.mp4".into(), right:"right.mp4".into(), loop_mode:2,
+            metrics:vec!["CPU".into(),"RAM".into()], ..Default::default() };
+        let msg = configured_play("on","off","full",67,&layout);
+        let request=parse(&msg).unwrap();
+        let config=parse(find_bytes(&request,200).unwrap()).unwrap();
+        let work=parse(find_bytes(&config,3).unwrap()).unwrap();
+        assert_eq!(find_int(&work,1),Some(1));
+        assert_eq!(find_int(&work,2),Some(2));
+        assert_eq!(find_str(&work,4),"left.mp4");
+        assert_eq!(find_str(&work,5),"right.mp4");
+        let msg=overlay(&layout);
+        let req=parse(&msg).unwrap();
+        let overlay=parse(find_bytes(&req,201).unwrap()).unwrap();
+        let group=parse(find_bytes(&overlay,1).unwrap()).unwrap();
+        assert_eq!(group.iter().filter(|(field,_)| *field==8).count(),2);
+    }
+
     #[test]
     fn khop_goi_tin_bat_duoc() {
         assert_eq!(frame(&msg_handshake()), h("545259580b0000000a020801a206040a024e41"));

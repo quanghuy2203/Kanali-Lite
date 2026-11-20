@@ -153,8 +153,8 @@ pub fn fetch_files(f: &mut File) -> Result<Vec<String>, String> {
 }
 
 pub fn apply_play(f: &mut File, cfg: &Config) -> Result<(), String> {
-    send(f, &proto::msg_play(&cfg.poweron, &cfg.standby, &cfg.playing, cfg.level))?;
-    send(f, &proto::msg_commit())
+    send(f, &proto::configured_play(&cfg.poweron, &cfg.standby, &cfg.playing, cfg.level,&cfg.layout))?;
+    send(f, &proto::overlay(&cfg.layout))
 }
 
 pub fn heartbeat(f: &mut File) -> Result<(), String> {
