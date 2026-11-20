@@ -159,6 +159,7 @@ struct CatalogEntry {
     path: String,
     kind: u32,
     writable: bool,
+    size: Option<u64>,
 }
 
 fn catalog_entries(body: &[u8]) -> Result<Vec<CatalogEntry>, String> {
@@ -180,7 +181,7 @@ fn catalog_entries(body: &[u8]) -> Result<Vec<CatalogEntry>, String> {
             let folder = if kind == 1 { "media" } else { "preset" };
             path = format!("/mnt/data/{folder}/{path}");
         }
-        entries.push(CatalogEntry { path, kind, writable: proto::find_int(&entry,4).unwrap_or(0) == 0 });
+        entries.push(CatalogEntry { path, kind, size: proto::find_int(&entry, 3), writable: proto::find_int(&entry,4).unwrap_or(0) == 0 });
     }
     Ok(entries)
 }
@@ -188,6 +189,22 @@ fn catalog_entries(body: &[u8]) -> Result<Vec<CatalogEntry>, String> {
 pub fn fetch_files(f: &mut File) -> Result<Vec<String>, String> {
     let catalog = tracked_reply(f, 103, &proto::f_str(1, "N/A"), 503)?;
     Ok(catalog_entries(&catalog)?.into_iter().map(|e| e.path).collect())
+}
+
+pub fn verify_upload(f: &mut File, name: &str, expected_size: u64) -> Result<Vec<String>, String> {
+    let mut detail = String::new();
+    for delay in [100, 300, 1000] {
+        thread::sleep(Duration::from_millis(delay));
+        let catalog = tracked_reply(f, 103, &proto::f_str(1, "N/A"), 503)?;
+        let entries = catalog_entries(&catalog)?;
+        if let Some(entry) = entries.iter().find(|e| e.kind == 1 && e.path.rsplit('/').next() == Some(name)) {
+            if entry.size.is_none() || entry.size == Some(expected_size) {
+                return Ok(entries.into_iter().map(|e| e.path).collect());
+            }
+            detail = format!(" ({} / {expected_size} byte)", entry.size.unwrap_or(0));
+        }
+    }
+    Err(format!("PANORAMA chưa nhận đủ tệp {name}{detail}"))
 }
 
 pub fn apply_play(f: &mut File, cfg: &Config) -> Result<(), String> {

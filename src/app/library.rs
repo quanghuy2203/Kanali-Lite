@@ -156,14 +156,13 @@ impl Library {
             if let Some(path) = self.queue.pop_front() {
                 let (tx, rx) = mpsc::channel();
                 self.job = Some(rx);
-                self.note = format!(
-                    "Đang nhập {}",
-                    self.projects
-                        .iter()
-                        .find(|p| p.path == path)
-                        .map(|p| p.title.as_str())
-                        .unwrap_or("wallpaper")
-                );
+                let project = self.projects.iter().find(|p| p.path == path);
+                let title = project.map(|p| p.title.as_str()).unwrap_or("wallpaper");
+                self.note = if project.is_some_and(|p| !p.kind.eq_ignore_ascii_case("video")) {
+                    format!("Đang nhập {title} · Ghi 15 giây từ Wallpaper Engine rồi chuyển video sang PANORAMA.")
+                } else {
+                    format!("Đang chuyển video {title} sang định dạng PANORAMA…")
+                };
                 std::thread::spawn(move || {
                     let _ = tx.send(super::media::import_wallpaper(path, true));
                 });

@@ -83,8 +83,9 @@ fn ffmpeg() -> Command {
             })
             .unwrap_or_else(|| "ffmpeg.exe".into()),
     );
-    cmd.creation_flags(0x08000000)
-        .args(["-nostdin", "-hide_banner", "-loglevel", "error", "-y"]);
+    use windows::Win32::System::Threading::{BELOW_NORMAL_PRIORITY_CLASS, CREATE_NO_WINDOW};
+    cmd.creation_flags(CREATE_NO_WINDOW.0 | BELOW_NORMAL_PRIORITY_CLASS.0)
+        .args(["-filter_threads", "2", "-filter_complex_threads", "2", "-nostdin", "-hide_banner", "-loglevel", "error", "-y"]);
     cmd
 }
 
@@ -217,9 +218,12 @@ fn start_engine() -> Result<PathBuf, String> {
 
 const ENCODE: &[&str] = &[
     "-an", "-pix_fmt", "yuv420p", "-c:v", "libx264", "-threads", "2", "-preset", "veryfast",
-    "-profile:v", "high", "-crf", "23", "-maxrate", "12M", "-bufsize", "24M", "-g", "30", "-f", "h264",
+    // Match the PANORAMA stream produced by KANALI's MediaX H.264 converter.
+    "-profile:v", "main", "-level:v", "4.1",
+    "-x264-params", "repeat-headers=1:annexb=1:aud=1:b-pyramid=0:weightp=0:ref=3:range=pc:colorprim=bt709:transfer=bt709:colormatrix=bt709",
+    "-color_range", "pc", "-crf", "23", "-maxrate", "12M", "-bufsize", "24M", "-g", "30", "-f", "h264",
 ];
-const SCALE: &str="fps=30,scale=2240:1080:force_original_aspect_ratio=decrease,pad=2240:1080:(ow-iw)/2:(oh-ih)/2,setsar=1";
+const SCALE: &str="fps=30,scale=2240:1080:force_original_aspect_ratio=decrease:out_range=full:out_color_matrix=bt709,pad=2240:1080:(ow-iw)/2:(oh-ih)/2,setsar=1";
 
 fn contains_picture(samples: &[u8]) -> bool {
     samples
@@ -372,7 +376,7 @@ fn import_media(source: PathBuf, project: bool, wallpaper: bool) -> Result<Strin
                 let result = Command::new(&engine)
                     .args(["-control", "openWallpaper", "-file"])
                     .arg(&source)
-                    .args(["-playInWindow", &window, "-width", "1120", "-height", "540", "-activate", "-borderless"])
+                    .args(["-playInWindow", &window, "-width", "896", "-height", "432", "-borderless"])
                     .creation_flags(0x08000000)
                     .status()
                     .map_err(|e| e.to_string())?;
@@ -380,10 +384,15 @@ fn import_media(source: PathBuf, project: bool, wallpaper: bool) -> Result<Strin
                     return Err("Wallpaper Engine không mở được dự án".into());
                 }
                 capture = Some(Wallpaper { engine, window });
-                use windows::{core::HSTRING, Win32::UI::WindowsAndMessaging::FindWindowW};
+                use windows::{core::HSTRING, Win32::UI::WindowsAndMessaging::{FindWindowW, SetWindowPos, HWND_BOTTOM, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE}};
                 let title = HSTRING::from(capture.as_ref().unwrap().window.as_str());
                 let start = std::time::Instant::now();
-                while unsafe { FindWindowW(None, &title) }.is_err() {
+                loop {
+                    if let Ok(window) = unsafe { FindWindowW(None, &title) } {
+                        // Leave the render surface alive for window capture without taking focus.
+                        unsafe { SetWindowPos(window, HWND_BOTTOM, 0, 0, 0, 0, SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE) }.map_err(|e| e.to_string())?;
+                        break;
+                    }
                     if start.elapsed() > Duration::from_secs(20) {
                         return Err("Wallpaper Engine chưa mở cửa sổ Scene sau 20 giây".into());
                     }
@@ -527,8 +536,23 @@ mod capture_tests {
         std::env::set_var("APPDATA", tmp.path());
         install_capture_tool().unwrap();
         let clip = tmp.path().join("device.h264");
-        run(ffmpeg().args(["-f","lavfi","-i","testsrc2=size=320x180:duration=1","-vf", SCALE])
+        run(ffmpeg().args(["-f","lavfi","-i","testsrc2=size=320x180:rate=30:duration=2","-vf", SCALE])
             .args(ENCODE).arg(&clip)).unwrap();
+        let bytes = fs::read(&clip).unwrap();
+        let units: Vec<_> = bytes.windows(3).enumerate()
+            .filter(|(_, prefix)| *prefix == [0, 0, 1])
+            .map(|(i, _)| &bytes[i + 3..]).collect();
+        let sps: Vec<_> = units.iter().filter(|u| u[0] & 31 == 7).collect();
+        assert!(sps.len() >= 2 && sps.iter().all(|u| u[1] == 77 && u[3] == 41));
+        assert_eq!(units.iter().filter(|u| u[0] & 31 == 9).count(), 60);
+        // Decode the entire stream, checking that the animation advances.
+        let decoded = ffmpeg().arg("-i").arg(&clip)
+            .args(["-vf", "fps=2,scale=64:32,format=gray", "-f", "rawvideo", "-"])
+            .output().unwrap();
+        assert!(decoded.status.success());
+        let frames: Vec<_> = decoded.stdout.chunks_exact(64 * 32).collect();
+        assert_eq!(frames.len(), 4);
+        assert!(frames.windows(2).all(|pair| pair[0] != pair[1]));
         assert_eq!(first_picture(&clip).unwrap(), Some(0.0));
         make_poster(&clip, "test.mp4").unwrap();
     }

@@ -320,8 +320,9 @@ impl App {
                         self.cfg.layout.split = false;
                         self.cfg.playing = self.carousel.clone();
                     }
+                    let repeat = config::load_opt::<config::Config>(&config::config_path()).as_ref() == Some(&self.cfg);
                     match config::save(&config::config_path(), &self.cfg) {
-                        Ok(()) => { config::send_command("apply"); self.media_note.clear(); },
+                        Ok(()) => { if repeat { config::send_command("apply"); } self.media_note.clear(); },
                         Err(e) => self.media_note = e.to_string(),
                     }
                 }

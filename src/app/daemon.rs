@@ -130,15 +130,13 @@ fn session(sh: &Arc<Shared>) -> Result<(), String> {
             let name = path.file_name().unwrap().to_string_lossy().into_owned();
             let mut last = Instant::now();
             sh.with(|s| s.media_status = format!("Đang gửi {name}…"));
+            let expected_size = std::fs::metadata(&path).map_err(|e| e.to_string())?.len();
             let result = device::upload(&mut f, &path, &name, |done, total| {
                 if last.elapsed() >= Duration::from_millis(500) {
                     sh.with(|s| s.media_status = format!("Đang gửi {name} · {}%", done * 100 / total));
                     last = Instant::now();
                 }
-            }).and_then(|_| device::fetch_files(&mut f)).and_then(|files| {
-                if !files.iter().any(|p| p.rsplit('/').next() == Some(name.as_str())) {
-                    return Err("Màn hình chưa xác nhận tệp trong thư viện".into());
-                }
+            }).and_then(|_| device::verify_upload(&mut f, &name, expected_size)).and_then(|files| {
                 sh.with(|s| { s.files = files; s.media_status = format!("Đã thêm {name}"); });
                 Ok(())
             });
@@ -147,8 +145,6 @@ fn session(sh: &Arc<Shared>) -> Result<(), String> {
                 sh.with(|s| s.media_status = format!("Không gửi được {name}: {e}. Có thể chọn lại tệp nguồn."));
                 return Err(e);
             }
-            cfg = load_cfg();
-            device::apply_play(&mut f,&cfg)?;
         }
         let refresh = sh.refresh.swap(false, Ordering::Relaxed);
         if refresh {
@@ -156,13 +152,13 @@ fn session(sh: &Arc<Shared>) -> Result<(), String> {
             sh.with(|s| s.files = files);
         }
         if let Some(new) = config::load_opt::<Config>(&config::config_path()) {
-            if sh.reapply.swap(false, Ordering::Relaxed) || refresh || new.playing != cfg.playing
+            if sh.reapply.swap(false, Ordering::Relaxed) || new.playing != cfg.playing
                 || new.poweron != cfg.poweron
                 || new.standby != cfg.standby
                 || new.level != cfg.level || new.layout != cfg.layout
             {
                 match device::apply_play(&mut f, &new) {
-                    Ok(()) => sh.with(|s| s.message = format!("PANORAMA đã xác nhận {}", new.playing)),
+                    Ok(()) => sh.with(|s| s.message = format!("PANORAMA đã nhận cấu hình phát {}", new.playing)),
                     Err(e) => sh.with(|s| s.message = e),
                 }
             }
