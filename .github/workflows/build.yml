@@ -28,13 +28,13 @@ jobs:
         shell: pwsh
         run: |
           $zip = Join-Path $env:RUNNER_TEMP 'kanali-original.zip'
-          curl.exe --fail --location --retry 2 --output $zip https://static.tryxzone.com/KANALI_V2.7.0_20261110.zip
+          curl.exe --fail --location --retry 1 --max-time 240 --referer https://www.tryxzone.com/en/software/ --output $zip https://static.tryxzone.com/KANALI_V2.7.0_20261110.zip
           if ($LASTEXITCODE -ne 0 -or (Get-FileHash $zip).Hash -ne 'b9b0df3629b15aef1ed48662b2b7aa8c6bc778fc59e87cc6c8e059fdbc993fa2') { throw 'Original KANALI archive did not match' }
           $dir = Join-Path $env:RUNNER_TEMP 'kanali-original'
           Expand-Archive $zip $dir
           $installer = (Get-ChildItem $dir -Filter '*.exe' -Recurse | Select-Object -First 1).FullName
-          $installed = Start-Process $installer -ArgumentList '/S' -PassThru -Wait
-          if ($installed.ExitCode -ne 0) { throw "Installer exit $($installed.ExitCode)" }
+          python .github/scripts/mediax_fixture.py $installer "$env:LOCALAPPDATA/Programs/KANALI"
+          if ($LASTEXITCODE -ne 0) { throw 'Extracting the MediaX fixture failed' }
           cargo test --locked --bin kanali native_mediax_converts_video -- --ignored
       - id: package
         shell: pwsh
