@@ -24,11 +24,11 @@ jobs:
       - run: cargo build --locked --release --bin kanali
       - name: Verify native KANALI conversion
         if: inputs.verify_mediax
-        timeout-minutes: 12
+        timeout-minutes: 20
         shell: pwsh
         run: |
           $zip = Join-Path $env:RUNNER_TEMP 'kanali-original.zip'
-          curl.exe --fail --location --retry 1 --max-time 240 --referer https://www.tryxzone.com/en/software/ --output $zip https://static.tryxzone.com/KANALI_V2.7.0_20261110.zip
+          curl.exe --fail --location --retry 1 --connect-timeout 20 --speed-time 90 --speed-limit 1024 --referer https://www.tryxzone.com/en/software/ --output $zip https://static.tryxzone.com/KANALI_V2.7.0_20261110.zip
           if ($LASTEXITCODE -ne 0 -or (Get-FileHash $zip).Hash -ne 'b9b0df3629b15aef1ed48662b2b7aa8c6bc778fc59e87cc6c8e059fdbc993fa2') { throw 'Original KANALI archive did not match' }
           $dir = Join-Path $env:RUNNER_TEMP 'kanali-original'
           Expand-Archive $zip $dir
