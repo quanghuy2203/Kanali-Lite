@@ -34,13 +34,13 @@ Chức năng nhập và tạo xem trước cần FFmpeg cho Windows có libx264.
 
 Preset có các thẻ xếp lớp. Dùng mũi tên để xem, bấm **Lưu vào màn hình** để áp dụng. Lite lấy ảnh của sáu preset mặc định từ bản KANALI đã cài ở thư mục chuẩn của Windows. Video nhập qua Lite dùng preview tạo từ chính video. Với tệp chỉ có trên thiết bị, có thể ghép bản nguồn trên PC. Thiết bị cung cấp danh sách tệp qua USB.
 
-Trong **Customization**, chọn Full Screen hoặc Screen Splitting. Với màn hình chia đôi, bấm từng ô và chọn media cho bên đó trước khi lưu. Chế độ phát gồm Single, Loop và Shuffle. Lớp thông tin hỗ trợ CPU Usage, Memory Utilization và Date & Time, với màu chữ, cỡ chữ và căn lề. Các mục nhiệt độ, xung nhịp, công suất và GPU lấy từ cảm biến do LibreHardwareMonitor công bố qua WMI. Chọn tối đa ba mục; dấu gạch ngang nghĩa là chưa có số đo.
+Trong **Customization**, chọn Full Screen hoặc Screen Splitting. Với màn hình chia đôi, bấm từng ô và chọn media cho bên đó trước khi lưu. Chế độ phát gồm Single, Loop và Shuffle.
 
 Khi bấm **Lưu vào màn hình**, Lite đọc cấu hình hiện tại, cập nhật phần đã chọn, rồi gửi lệnh kích hoạt. Nút **Chép chẩn đoán phát** sao chép tên video, chế độ phát và trạng thái đèn nền mà firmware trả về ở từng bước. Nếu tản đứng hình, lấy chẩn đoán ngay sau lần bấm Lưu đó.
 
 ### Thư viện Wallpaper Engine
 
-Trong **Customization**, bấm **Mở thư viện Wallpaper Engine**. Cửa sổ riêng hiển thị ảnh bìa, tên và loại của từng dự án, có ô tìm kiếm và nút nhập. **Mở Wallpaper Engine để tải thêm** mở ứng dụng chính chủ. Khi tải xong, Lite tự cập nhật danh sách. Bật **Tự nhập wallpaper mới tải** để chuyển các mục mới vào hàng chờ USB khi cửa sổ còn mở. Web và Scene được ghi từ cửa sổ Wallpaper Engine chạy phía sau giao diện thành clip 15 giây, Video dùng tệp nguồn. Nếu bộ FFmpeg hiện tại không ghi được Scene, chọn **Cài công cụ ghi Scene**. Lite tải FFmpeg một lần (khoảng 105 MiB), kiểm tra SHA-256 rồi dùng bản này cho các lần nhập sau.
+Trong **Customization**, bấm **Mở thư viện Wallpaper Engine**. Cửa sổ riêng hiển thị ảnh bìa, tên và loại của từng dự án, có ô tìm kiếm và nút nhập. **Mở Wallpaper Engine để tải thêm** mở ứng dụng chính chủ. Khi tải xong, Lite tự cập nhật danh sách. Bật **Tự nhập wallpaper mới tải** để chuyển các mục mới vào hàng chờ USB khi cửa sổ còn mở. Web và Scene được ghi từ cửa sổ Wallpaper Engine chạy phía sau giao diện thành clip 8 giây, Video dùng tệp nguồn. Nếu bộ FFmpeg hiện tại không ghi được Scene, chọn **Cài công cụ ghi Scene**. Lite tải FFmpeg một lần (khoảng 105 MiB), kiểm tra SHA-256 rồi dùng bản này cho các lần nhập sau.
 
 Trong thư viện PANORAMA, bấm **Xóa** trên thẻ media đã thêm rồi xác nhận. Nếu tệp đang phát, Lite chuyển về Cooling delivery và đợi màn hình xác nhận trước khi xóa. Nút **Khôi phục màn hình** bật đèn nền và phát lại preset này ở chế độ toàn màn hình. Bạn cũng có thể xóa preset tải về `download_46` nếu thiết bị cho phép ghi. Khi nhập wallpaper, Lite kiểm tra clip đã chuyển đổi trước khi gửi qua USB. Nếu clip chỉ có khung đen, Lite hủy nhập. Với clip có đoạn mở đầu tối, ảnh xem trước bắt đầu từ khung lấy mẫu có hình.
 
@@ -51,4 +51,11 @@ Cấu hình và trạng thái nằm ở `%APPDATA%\kanali-rs\` (`config.json`, `
 
 Trong **Customization → Wallpaper Engine**, chọn số màn hình PC (bắt đầu từ 0) rồi bấm **Kết nối / đọc wallpaper đang chạy**. Lite hỏi ứng dụng đang chạy bằng lệnh `getWallpaper`. Sau khi thấy tên wallpaper, bấm **Nhập vào PANORAMA** để lấy nội dung hiện tại. Đổi wallpaper trên desktop rồi bấm đọc lại để cập nhật lựa chọn. Lite tự khởi chạy Wallpaper Engine qua Steam nếu cần.
 
-Preset và Customization hiển thị số đo trong bảng và trên preview của các mục đã chọn. CPU Usage và RAM được lấy trực tiếp từ Windows. GPU Usage và xung nhịp dùng nguồn Windows khi khả dụng; driver NVIDIA và LibreHardwareMonitor bổ sung cảm biến tùy phần cứng. Dấu gạch ngang biểu thị nguồn chưa trả về giá trị.
+
+## Xử lý sự cố đứng hình
+- Chuột phải icon Kanali ở khay hệ thống, chọn **Khôi phục màn hình (phát video gốc)** để về lại video mặc định.
+- Nhật ký hoạt động ở `%APPDATA%\kanali-rs\kanali.log`. Khi cần hỗ trợ, gửi file này cùng nội dung nút **Chép chẩn đoán phát**.
+- Tắt mọi chương trình khác đang giữ màn hình (KANALI gốc, `kanali-rs.exe` cũ chạy ngầm) trước khi dùng.
+
+- Hai file đánh dấu để thử nghiệm trong `%APPDATA%\kanali-rs\`: `simple-play` (chỉ gửi lệnh phát tối giản) và `force-ffmpeg` (nhập video bằng FFmpeg thay vì MediaX).
+- Từ v0.2.15, video nhập mới dùng tên ngắn tương thích bộ phát của firmware. Hãy nhập lại từ nguồn; các video tên dài đã chép lên màn hình trước đó không tự được đổi tên.

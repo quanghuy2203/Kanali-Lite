@@ -11,8 +11,6 @@ mod mediax;
 mod giphy;
 mod library;
 mod presets;
-mod telemetry;
-mod sensors;
 mod ui;
 
 use std::{env, process::Command, time::Duration};

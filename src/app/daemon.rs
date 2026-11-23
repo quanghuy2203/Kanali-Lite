@@ -65,18 +65,25 @@ fn effective_repo(cfg: &Config) -> String {
 // ---------------- kết nối màn hình ----------------
 
 fn worker(sh: Arc<Shared>) {
+    let mut delay = 3u64;
     loop {
+        let started = Instant::now();
         sh.with(|s| {
             s.connected = false;
             s.message = "Đang kết nối với màn hình...".into();
         });
         if let Err(e) = session(&sh) {
+            config::log(&format!("phiên kết nối kết thúc: {e}"));
             sh.with(|s| {
                 s.connected = false;
                 s.message = e;
             });
         }
-        thread::sleep(Duration::from_secs(3));
+        // Lỗi lặp lại nhanh thì chờ lâu hơn: mỗi lần kết nối lại là một lần khởi tạo màn hình,
+        // làm lặp liên tục có thể khiến tản đứng hình.
+        let quick = started.elapsed() < Duration::from_secs(60);
+        thread::sleep(Duration::from_secs(delay));
+        delay = if quick { (delay * 2).min(60) } else { 3 };
     }
 }
 
@@ -103,7 +110,6 @@ fn session(sh: &Arc<Shared>) -> Result<(), String> {
         config::save(&config::config_path(), &cfg).map_err(|e| e.to_string())?;
     }
     let initial = device::apply_play(&mut f, &cfg);
-    let mut applied_layout = initial.as_ref().ok().map(|_| cfg.layout.clone());
     sh.with(|s| {
         s.connected = true;
         s.message = initial.err().unwrap_or_else(|| "Đã kết nối".into());
@@ -112,8 +118,8 @@ fn session(sh: &Arc<Shared>) -> Result<(), String> {
     });
 
     let request_path=config::data_dir().join("remove-request.json");
-    let mut sampler=crate::telemetry::Sampler::default();
     let mut last_hb = Instant::now();
+    let mut misses = 0u32;
     loop {
         thread::sleep(Duration::from_millis(400));
         if let Some(req)=config::load_opt::<config::Removal>(&request_path){
@@ -160,17 +166,29 @@ fn session(sh: &Arc<Shared>) -> Result<(), String> {
             {
                 match device::apply_play(&mut f, &new) {
                     Ok(()) => {
-                        applied_layout = Some(new.layout.clone());
                         sh.with(|s| s.message = format!("PANORAMA đã nhận cấu hình phát {}", new.playing));
                     }
-                    Err(e) => { applied_layout = None; sh.with(|s| s.message = e); }
+                    Err(e) => { sh.with(|s| s.message = e); }
                 }
+                // Cho màn hình thời gian nạp video mới trước nhịp heartbeat kế tiếp.
+                last_hb = Instant::now();
             }
             cfg = new;
         }
         if last_hb.elapsed() >= Duration::from_secs(2) {
-            device::heartbeat(&mut f)?;
-            if let Some(layout) = &applied_layout { sampler.publish(&mut f,layout)?; }
+            // Một nhịp trả lời chậm (ví dụ lúc màn hình đang nạp video) không đáng để
+            // ngắt kết nối và khởi tạo lại; chỉ ngắt sau 3 nhịp liên tiếp thất bại.
+            match device::heartbeat(&mut f) {
+                Ok(()) => misses = 0,
+                Err(e) => {
+                    misses += 1;
+                    config::log(&format!("heartbeat lỗi ({misses}/3): {e}"));
+                    if misses >= 3 {
+                        return Err(e);
+                    }
+                    sh.with(|s| s.message = format!("Màn hình phản hồi chậm ({misses}/3): {e}"));
+                }
+            }
             last_hb = Instant::now();
         }
     }
@@ -323,8 +341,10 @@ pub fn run(_lock: File) {
     let menu = Menu::new();
     let open = MenuItem::new("Mở giao diện", true, None);
     let check = MenuItem::new("Kiểm tra cập nhật", true, None);
+    let restore = MenuItem::new("Khôi phục màn hình (phát video gốc)", true, None);
     let quit = MenuItem::new("Thoát (màn hình sẽ tắt)", true, None);
     let _ = menu.append(&open);
+    let _ = menu.append(&restore);
     let _ = menu.append(&check);
     let _ = menu.append(&PredefinedMenuItem::separator());
     let _ = menu.append(&quit);
@@ -349,6 +369,12 @@ pub fn run(_lock: File) {
                 crate::spawn_self("--ui");
             } else if ev.id == *check.id() {
                 config::send_command("check");
+            } else if ev.id == *restore.id() {
+                // Lối thoát khi một video làm tản đứng hình: về lại video gốc.
+                let mut cfg = load_cfg();
+                cfg.restore_screen();
+                let _ = config::save(&config::config_path(), &cfg);
+                config::send_command("apply");
             } else if ev.id == *quit.id() {
                 *flow = ControlFlow::Exit;
             }

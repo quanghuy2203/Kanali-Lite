@@ -198,8 +198,6 @@ struct App {
     clips: std::collections::HashMap<String,Option<Clip>>,
     carousel: String,
     draft: config::Layout,
-    sampler:crate::telemetry::Sampler,
-    readings:std::collections::BTreeMap<String,String>,
     full: String,
     right_slot: bool,
     wallpaper:Option<crate::media::ActiveWallpaper>,
@@ -221,7 +219,7 @@ impl App {
         let state: State = config::load_opt(&config::state_path()).unwrap_or_default();
         let (tx, assets_ready)=std::sync::mpsc::channel();
         std::thread::spawn(move || { crate::presets::cache(); let _=tx.send(()); });
-        Self { sampler:Default::default(), readings:Default::default(), draft:cfg.layout.clone(), full:cfg.playing.clone(), carousel: cfg.playing.clone(), clips:Default::default(), right_slot:false, wallpaper:None,wallpaper_query:None,wallpaper_monitor:0,wallpaper_note:String::new(), gif_id:None, assets_ready, media_job: None, media_note: String::new(), page: Page::Home, display_tab: false, cfg, state, last_read: Instant::now(), autostart: autostart::is_enabled(), notice: String::new() }
+        Self { draft:cfg.layout.clone(), full:cfg.playing.clone(), carousel: cfg.playing.clone(), clips:Default::default(), right_slot:false, wallpaper:None,wallpaper_query:None,wallpaper_monitor:0,wallpaper_note:String::new(), gif_id:None, assets_ready, media_job: None, media_note: String::new(), page: Page::Home, display_tab: false, cfg, state, last_read: Instant::now(), autostart: autostart::is_enabled(), notice: String::new() }
     }
 
     fn save(&self) {
@@ -426,10 +424,6 @@ impl eframe::App for App {
                 }
                 self.state = s;
             }
-            if self.page==Page::Panorama {
-                let keys=panorama::METRICS.iter().map(|(k,_)|k.to_string()).collect::<Vec<_>>();
-                self.readings=self.sampler.readings(&keys);
-            } else {self.sampler=Default::default();}
             self.gif_id=config::load_opt(&config::data_dir().join("giphy-item.json"));
             self.last_read = Instant::now();
         }

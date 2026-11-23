@@ -35,15 +35,11 @@ pub struct Layout {
     pub left: String,
     pub right: String,
     pub loop_mode: u64,
-    pub metrics: Vec<String>,
-    pub dark_text: bool,
-    pub alignment: u64,
-    pub font_size: u64,
     pub enabled: bool,
 }
 impl Default for Layout {
     fn default() -> Self {
-        Self { split:false, left:String::new(), right:String::new(), loop_mode:0, metrics:Vec::new(), dark_text:false, alignment:1, font_size:32, enabled:true }
+        Self { split:false, left:String::new(), right:String::new(), loop_mode:0, enabled:true }
     }
 }
 
@@ -172,4 +168,16 @@ pub fn request_removal(path:String,serial:String)->Result<(),String>{
     serde_json::to_writer(tmp.as_file(),&Removal{path,serial,requested_ms:now_ms()}).map_err(|e|e.to_string())?;
     tmp.persist_noclobber(dir.join("remove-request.json")).map_err(|_|"Đang có một yêu cầu xóa chờ xử lý")?;
     Ok(())
+}
+
+/// Ghi nhật ký vào %APPDATA%\kanali-rs\kanali.log (tự xoay vòng khi quá 256 KB).
+pub fn log(msg: &str) {
+    use std::io::Write;
+    let p = data_dir().join("kanali.log");
+    if fs::metadata(&p).map(|m| m.len() > 256 * 1024).unwrap_or(false) {
+        let _ = fs::rename(&p, data_dir().join("kanali.log.1"));
+    }
+    if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(&p) {
+        let _ = writeln!(f, "{} {}", now_ms(), msg);
+    }
 }

@@ -159,7 +159,7 @@ impl Library {
                 let project = self.projects.iter().find(|p| p.path == path);
                 let title = project.map(|p| p.title.as_str()).unwrap_or("wallpaper");
                 self.note = if project.is_some_and(|p| !p.kind.eq_ignore_ascii_case("video")) {
-                    format!("Đang nhập {title} · Ghi 15 giây từ Wallpaper Engine rồi chuyển video sang PANORAMA.")
+                    format!("Đang nhập {title} · Ghi 8 giây từ Wallpaper Engine rồi chuyển video sang PANORAMA.")
                 } else {
                     format!("Đang chuyển video {title} sang định dạng PANORAMA…")
                 };

@@ -7,20 +7,6 @@ fn title_for(name: &str) -> String {
         .unwrap_or_else(|| label_of(name))
 }
 
-pub(super) const METRICS: &[(&str, &str)] = &[
-    ("CPU Temperature", "CPU Temperature"),
-    ("CPU Frequency", "CPU Frequency"),
-    ("CPU", "CPU Usage"),
-    ("CPU Power", "CPU Power"),
-    ("GPU Temperature", "GPU Temperature"),
-    ("GPU Frequency", "GPU Frequency"),
-    ("GPU Usage", "GPU Usage"),
-    ("GPU Power", "GPU Power"),
-    ("Memory Frequency", "Memory Frequency"),
-    ("RAM", "Memory Utilization"),
-    ("Date & Time", "Date & Time"),
-];
-
 impl App {
     fn artwork(&mut self, ui: &egui::Ui, name: &str, rect: Rect, animate: bool) -> bool {
         if name.is_empty() {
@@ -120,41 +106,6 @@ impl App {
                 Color32::WHITE,
             );
         }
-        if focus && !self.draft.metrics.is_empty() && rect.height() > 110. {
-            let painter = ui.painter_at(rect.shrink(4.));
-            let text = self
-                .draft
-                .metrics
-                .iter()
-                .take(3)
-                .map(|key| {
-                    self.readings
-                        .get(key)
-                        .cloned()
-                        .unwrap_or_else(|| format!("{key}  —"))
-                })
-                .collect::<Vec<_>>()
-                .join("\n");
-            let (x, align) = match self.draft.alignment {
-                2 => (rect.center().x, Align2::CENTER_BOTTOM),
-                3 => (rect.right() - 12., Align2::RIGHT_BOTTOM),
-                _ => (rect.left() + 12., Align2::LEFT_BOTTOM),
-            };
-            let color = if self.draft.dark_text {
-                Color32::BLACK
-            } else {
-                Color32::WHITE
-            };
-            painter.text(
-                egui::pos2(x, rect.bottom() - 10.),
-                align,
-                text,
-                FontId::proportional(
-                    (self.draft.font_size as f32 * rect.height() / 480.).clamp(12., 28.),
-                ),
-                color,
-            );
-        }
         ui.painter().rect_stroke(
             rect,
             8.,
@@ -232,68 +183,6 @@ impl App {
             {
                 self.pick_media(Some(self.carousel.clone()));
             }
-        });
-    }
-
-    fn metrics(&mut self, ui: &mut egui::Ui) {
-        ui.strong("Thông số trực tiếp · chọn tối đa 3");
-        ui.horizontal_wrapped(|ui| {
-            let cols = if ui.available_width() > 660. { 3 } else { 2 };
-            egui::Grid::new("live-sensor-grid")
-                .num_columns(cols)
-                .spacing(vec2(16., 7.))
-                .show(ui, |ui| {
-                    for (index, &(key, label)) in METRICS.iter().enumerate() {
-                        let mut selected = self.draft.metrics.iter().any(|m| m == key);
-                        let enabled = selected || self.draft.metrics.len() < 3;
-                        if ui
-                            .add_enabled(
-                                enabled,
-                                egui::Checkbox::new(
-                                    &mut selected,
-                                    format!(
-                                        "{}    {}",
-                                        label,
-                                        self.readings
-                                            .get(key)
-                                            .map(|v| v.strip_prefix(key).unwrap_or(v).trim())
-                                            .unwrap_or("—")
-                                    ),
-                                ),
-                            )
-                            .on_hover_text(if matches!(key, "CPU" | "RAM" | "Date & Time") {
-                                "Windows"
-                            } else {
-                                "Theo phần cứng: Windows, NVIDIA hoặc LibreHardwareMonitor"
-                            })
-                            .changed()
-                        {
-                            self.draft.metrics.retain(|m| m != key);
-                            if selected {
-                                self.draft.metrics.push(key.into());
-                            }
-                        }
-                        if index % cols == cols - 1 {
-                            ui.end_row();
-                        }
-                    }
-                });
-        });
-        ui.small("—  Chưa có số đo. Nhiệt độ và công suất cần driver NVIDIA hoặc cảm biến LibreHardwareMonitor tương ứng.");
-        ui.add_enabled_ui(!self.draft.metrics.is_empty(), |ui| {
-            ui.horizontal_wrapped(|ui| {
-                ui.checkbox(&mut self.draft.dark_text, "Chữ đen");
-                egui::ComboBox::from_id_salt("align")
-                    .selected_text(
-                        ["Trái", "Giữa", "Phải"][(self.draft.alignment.clamp(1, 3) - 1) as usize],
-                    )
-                    .show_ui(ui, |ui| {
-                        for (i, v) in ["Trái", "Giữa", "Phải"].iter().enumerate() {
-                            ui.selectable_value(&mut self.draft.alignment, i as u64 + 1, *v);
-                        }
-                    });
-                ui.add(egui::Slider::new(&mut self.draft.font_size, 18..=64).text("Cỡ chữ"));
-            })
         });
     }
 
@@ -446,9 +335,6 @@ impl App {
             self.carousel(ui, &presets);
         }
         ui.separator();
-        if !self.display_tab {
-            self.metrics(ui);
-        }
         if self.display_tab {
             ui.separator();
             ui.heading("Thư viện media trên PANORAMA");
@@ -652,7 +538,6 @@ impl App {
                 ui.label(&self.wallpaper_note);
             }
             ui.separator();
-            ui.collapsing("Thông số hiển thị", |ui| self.metrics(ui));
         }
         ui.collapsing("Cài đặt màn hình", |ui| {
             self.display_card(ui);

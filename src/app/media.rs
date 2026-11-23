@@ -220,7 +220,7 @@ const ENCODE: &[&str] = &[
     "-an", "-pix_fmt", "yuv420p", "-c:v", "libx264", "-threads", "2", "-preset", "veryfast",
     // Match the PANORAMA stream produced by KANALI's MediaX H.264 converter.
     "-profile:v", "main", "-level:v", "4.1",
-    "-x264-params", "repeat-headers=1:annexb=1:aud=1:b-pyramid=0:weightp=0:ref=3:range=pc:colorprim=bt709:transfer=bt709:colormatrix=bt709",
+    "-x264-params", "repeat-headers=1:annexb=1:aud=1:b-pyramid=0:weightp=0:ref=3:range=pc:colorprim=bt709:transfer=bt709:colormatrix=bt709:bframes=0",
     "-color_range", "pc", "-crf", "23", "-maxrate", "12M", "-bufsize", "24M", "-g", "30", "-f", "h264",
 ];
 const SCALE: &str="fps=60,scale=2240:1080:force_original_aspect_ratio=decrease:out_range=full:out_color_matrix=bt709,pad=2240:1080:(ow-iw)/2:(oh-ih)/2,setsar=1";
@@ -274,7 +274,9 @@ fn first_picture(path: &Path) -> Result<Option<f64>, String> {
 }
 
 fn capture_scene(w: &Wallpaper, target: &Path, intermediate: bool) -> Result<f64, String> {
-    let filter = if intermediate { "fps=30,format=yuv420p" } else { SCALE };
+    // Cửa sổ thu có thể có kích thước lẻ (ví dụ 912x471 do viền cửa sổ); libx264 với yuv420p
+    // chỉ nhận chiều rộng và cao chẵn, nên cắt bớt tối đa 1 điểm ảnh mỗi chiều.
+    let filter = if intermediate { "fps=30,crop=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p" } else { SCALE };
     let capture_args: &[&str] = if intermediate {
         &["-an", "-c:v", "libx264", "-threads", "2", "-preset", "ultrafast", "-crf", "16", "-f", "mp4"]
     } else { ENCODE };
@@ -301,7 +303,7 @@ fn capture_scene(w: &Wallpaper, target: &Path, intermediate: bool) -> Result<f64
         // Wall-clock limit also covers capture sources that stop delivering frames.
         let log = tempfile::tempfile().map_err(|e| e.to_string())?;
         let mut child = cmd
-            .args(["-t", "15"])
+            .args(["-t", "8"])
             .args(capture_args)
             .arg(target)
             .stderr(log.try_clone().map_err(|e| e.to_string())?)
@@ -344,14 +346,36 @@ pub fn import(source: PathBuf, project: bool) -> Result<String, String> {
     import_media(source, project, project)
 }
 
+/// Ghi vào nhật ký profile, level, fps... của clip vừa mã hóa để so sánh với video gốc của màn hình.
+fn log_stream_info(path: &Path, encoder: &str) {
+    let size = fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+    let info = ffmpeg()
+        .args(["-loglevel", "info", "-f", "h264", "-i"])
+        .arg(path)
+        .output()
+        .ok()
+        .and_then(|o| {
+            String::from_utf8_lossy(&o.stderr)
+                .lines()
+                .find(|l| l.contains("Video:"))
+                .map(|l| l.trim().to_string())
+        })
+        .unwrap_or_else(|| "không đọc được thông tin luồng".into());
+    config::log(&format!("clip mới ({encoder}): {size} byte · {info}"));
+}
+
+// PANORAMA accepts long names in its catalogue/config replies, but its player
+// uses a shorter fixed-size media-name buffer. Match the compact naming style
+// of the official KANALI app so a successfully uploaded file can also be opened.
+fn device_media_name(now_ms: u64) -> String {
+    let name = format!("media_{now_ms}.mp4.h264_2240x1080");
+    debug_assert!(name.len() < 64);
+    name
+}
+
 fn import_media(source: PathBuf, project: bool, wallpaper: bool) -> Result<String, String> {
     let mut input = source.clone();
     let mut capture = None;
-    let mut label = source
-        .file_stem()
-        .unwrap_or_default()
-        .to_string_lossy()
-        .into_owned();
     if project {
         let json: serde_json::Value =
             serde_json::from_reader(fs::File::open(&source).map_err(|e| e.to_string())?)
@@ -368,9 +392,6 @@ fn import_media(source: PathBuf, project: bool, wallpaper: bool) -> Result<Strin
             let entry = root.join(json["file"].as_str().ok_or("Video thiếu trường file")?);
             input = entry.canonicalize().map_err(|e| format!("Thiếu video nguồn: {e}"))?;
             if !input.starts_with(&root) { return Err("Tệp nằm ngoài thư mục dự án".into()); }
-        }
-        if let Some(title) = json["title"].as_str() {
-            label = title.into();
         }
         match kind.as_str() {
             "video" => (),
@@ -411,7 +432,8 @@ fn import_media(source: PathBuf, project: bool, wallpaper: bool) -> Result<Strin
     let temp = tempfile::NamedTempFile::new_in(&queue)
         .map_err(|e| e.to_string())?
         .into_temp_path();
-    let native = super::mediax::installed().is_some();
+    let native = super::mediax::installed().is_some()
+        && !config::data_dir().join("force-ffmpeg").exists();
     let preview_start;
     let mut encoder = String::from("FFmpeg");
     if native {
@@ -442,12 +464,8 @@ fn import_media(source: PathBuf, project: bool, wallpaper: bool) -> Result<Strin
     if !(1..=500_000_000).contains(&fs::metadata(&temp).map_err(|e| e.to_string())?.len()) {
         return Err("Video sau chuyển đổi phải dưới 500 MB".into());
     }
-    let slug: String = label
-        .chars()
-        .take(40)
-        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
-        .collect();
-    let name = format!("{slug}-{}.mp4.h264_2240x1080", config::now_ms());
+    log_stream_info(&temp, &encoder);
+    let name = device_media_name(config::now_ms());
     make_poster_at(&temp, &name, preview_start)?;
     temp.persist_noclobber(queue.join(&name))
         .map_err(|e| e.to_string())?;
@@ -550,6 +568,13 @@ pub fn active_wallpaper(monitor: u32) -> Result<ActiveWallpaper, String> {
 #[cfg(test)]
 mod capture_tests {
     use super::*;
+    #[test]
+    fn device_media_names_fit_the_firmware_player_buffer() {
+        let name = device_media_name(u64::MAX);
+        assert!(name.is_ascii());
+        assert!(name.len() < 64, "{name}");
+        assert!(name.ends_with(".mp4.h264_2240x1080"));
+    }
     #[test]
     #[ignore = "requires an installed original KANALI encoder"]
     fn native_mediax_converts_video() {

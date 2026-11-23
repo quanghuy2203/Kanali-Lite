@@ -188,7 +188,15 @@ fn catalog_entries(body: &[u8]) -> Result<Vec<CatalogEntry>, String> {
 
 pub fn fetch_files(f: &mut File) -> Result<Vec<String>, String> {
     let catalog = tracked_reply(f, 103, &proto::f_str(1, "N/A"), 503)?;
-    Ok(catalog_entries(&catalog)?.into_iter().map(|e| e.path).collect())
+    match catalog_entries(&catalog) {
+        Ok(entries) => Ok(entries.into_iter().map(|e| e.path).collect()),
+        // Một mục lạ không được làm hỏng cả phiên: mỗi lần kết nối lại là một lần
+        // khởi tạo màn hình. Dùng cách đọc lỏng để vẫn lấy được danh sách.
+        Err(e) => {
+            crate::config::log(&format!("danh mục USB lạ, dùng cách đọc lỏng: {e}"));
+            Ok(proto::find_paths(&catalog))
+        }
+    }
 }
 
 pub fn verify_upload(f: &mut File, name: &str, expected_size: u64) -> Result<Vec<String>, String> {
@@ -208,8 +216,14 @@ pub fn verify_upload(f: &mut File, name: &str, expected_size: u64) -> Result<Vec
 }
 
 pub fn apply_play(f: &mut File, cfg: &Config) -> Result<(), String> {
-    let mut trace = format!("Kanali Lite {} · {} ms\nVideo: {} · split={} · metrics={:?}\n",
-        env!("CARGO_PKG_VERSION"), now_ms(), cfg.playing, cfg.layout.split, cfg.layout.metrics);
+    // File đánh dấu %APPDATA%\kanali-rs\simple-play: chỉ gửi chuỗi lệnh phát tối giản (200 + 201).
+    if crate::config::data_dir().join("simple-play").exists() {
+        let result = legacy_play(f, cfg);
+        crate::config::log(&format!("phát (tối giản) {}: {}", cfg.playing, match &result { Ok(()) => "ok".to_string(), Err(e) => e.clone() }));
+        return result;
+    }
+    let mut trace = format!("Kanali Lite {} · {} ms\nVideo: {} · split={}\n",
+        env!("CARGO_PKG_VERSION"), now_ms(), cfg.playing, cfg.layout.split);
     let mut pending = None;
     let result = switch_video(cfg, &mut trace, |field, body| {
         let id = send_tracked(f, field, body)?;
@@ -220,9 +234,24 @@ pub fn apply_play(f: &mut File, cfg: &Config) -> Result<(), String> {
             Ok(Vec::new())
         }
     });
+    // Firmware không trả lời lệnh đọc cấu hình (104): dùng cách phát tối giản
+    // (chuỗi 200 + 201 đã chạy được trên PANORAMA thật) thay vì bỏ màn hình giữa chừng.
+    let result = match result {
+        Err(e) if e.starts_with("Đọc cấu hình trước khi lưu") => {
+            trace.push_str(&format!("{e}\nDùng phương án phát tối giản.\n"));
+            legacy_play(f, cfg)
+        }
+        other => other,
+    };
     if let Err(e) = &result { trace.push_str(e); }
+    crate::config::log(&format!("phát {}: {}", cfg.playing, match &result { Ok(()) => "ok".to_string(), Err(e) => e.clone() }));
     let _ = crate::config::save(&crate::config::data_dir().join("last-playback.json"), &trace);
     result
+}
+
+fn legacy_play(f: &mut File, cfg: &Config) -> Result<(), String> {
+    send(f, &proto::configured_play(&cfg.poweron, &cfg.standby, &cfg.playing, cfg.level, &cfg.layout))?;
+    send(f, &proto::msg_commit())
 }
 
 fn switch_video(cfg: &Config, trace: &mut String,
@@ -235,9 +264,7 @@ fn switch_video(cfg: &Config, trace: &mut String,
     let stored = command(104, &[]).map_err(|e| format!("Xác nhận cấu hình đã ghi: {e}"))?;
     trace.push_str(&format!("Sau lệnh 200: {}\n", playback_summary(&stored)));
     // Firmware may expose the new media only after it processes the run configuration.
-    let overlay = proto::overlay(&cfg.layout);
-    let fields = proto::parse(&overlay).ok_or("Lớp hiển thị không hợp lệ")?;
-    command(201, proto::find_bytes(&fields, 201).ok_or("Thiếu lớp hiển thị")?)
+    command(201, &[])
         .map_err(|e| format!("Kích hoạt màn hình: {e}"))?;
     for wait in [0, 150, 500] {
         if wait != 0 { thread::sleep(Duration::from_millis(wait)); }
