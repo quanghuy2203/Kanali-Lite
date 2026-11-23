@@ -11,11 +11,13 @@ use kanali_rs::{
 #[path="panorama.rs"]
 mod panorama;
 
-const BG: Color32 = Color32::from_rgb(29, 32, 37);
-const CARD: Color32 = Color32::from_rgb(37, 40, 46);
-const BORDER: Color32 = Color32::from_rgb(58, 60, 55);
-const ACCENT: Color32 = Color32::from_rgb(225, 248, 72);
-const DIM: Color32 = Color32::from_rgb(172, 176, 165);
+const BG: Color32 = Color32::from_rgb(14, 17, 23);
+const SIDEBAR: Color32 = Color32::from_rgb(19, 23, 30);
+const CARD: Color32 = Color32::from_rgb(24, 29, 37);
+const CARD_HOVER: Color32 = Color32::from_rgb(30, 36, 45);
+const BORDER: Color32 = Color32::from_rgb(46, 54, 65);
+const ACCENT: Color32 = Color32::from_rgb(221, 245, 76);
+const DIM: Color32 = Color32::from_rgb(154, 164, 178);
 const GOOD: Color32 = Color32::from_rgb(52, 211, 153);
 const WARN: Color32 = Color32::from_rgb(251, 191, 36);
 const BAD: Color32 = Color32::from_rgb(248, 113, 113);
@@ -55,13 +57,15 @@ pub(super) fn setup(ctx: &egui::Context) {
     let mut v = egui::Visuals::dark();
     v.panel_fill = BG;
     v.window_fill = CARD;
-    v.extreme_bg_color = Color32::from_rgb(9, 11, 17);
+    v.extreme_bg_color = Color32::from_rgb(10, 12, 17);
     v.widgets.noninteractive.bg_stroke = Stroke::new(1.0_f32, BORDER);
-    v.widgets.inactive.bg_fill = Color32::from_rgb(47, 49, 43);
-    v.widgets.inactive.weak_bg_fill = Color32::from_rgb(47, 49, 43);
-    v.widgets.hovered.weak_bg_fill = Color32::from_rgb(68, 72, 60);
+    v.widgets.inactive.bg_fill = Color32::from_rgb(32, 38, 47);
+    v.widgets.inactive.weak_bg_fill = Color32::from_rgb(32, 38, 47);
+    v.widgets.hovered.bg_fill = CARD_HOVER;
+    v.widgets.hovered.weak_bg_fill = CARD_HOVER;
+    v.widgets.active.bg_fill = Color32::from_rgb(39, 46, 56);
     for w in [&mut v.widgets.inactive, &mut v.widgets.hovered, &mut v.widgets.active] {
-        w.rounding = Rounding::same(8.0);
+        w.rounding = Rounding::same(10.0);
     }
     v.selection.bg_fill = ACCENT.gamma_multiply(0.30);
     v.selection.stroke = Stroke::new(1.0_f32, ACCENT);
@@ -69,9 +73,10 @@ pub(super) fn setup(ctx: &egui::Context) {
     ctx.style_mut(|s| {
         s.text_styles.insert(egui::TextStyle::Body,egui::FontId::proportional(15.0));
         s.text_styles.insert(egui::TextStyle::Button,egui::FontId::proportional(15.0));
-        s.spacing.interact_size.y=32.;
-        s.spacing.item_spacing = vec2(8.0, 8.0);
-        s.spacing.button_padding = vec2(14.0, 7.0);
+        s.spacing.interact_size.y=36.;
+        s.spacing.item_spacing = vec2(10.0, 10.0);
+        s.spacing.button_padding = vec2(15.0, 8.0);
+        s.animation_time = 0.16;
     });
 }
 
@@ -81,13 +86,13 @@ fn card(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) {
     egui::Frame::none()
         .fill(CARD)
         .stroke(Stroke::new(1.0_f32, BORDER))
-        .rounding(12.0)
-        .inner_margin(Margin::same(14.0))
+        .rounding(14.0)
+        .inner_margin(Margin::same(16.0))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             add(ui);
         });
-    ui.add_space(4.0);
+    ui.add_space(6.0);
 }
 
 fn title(ui: &mut egui::Ui, text: &str) {
@@ -180,6 +185,14 @@ impl Page {
             Self::Settings => "Cài đặt",
         }
     }
+
+    fn icon(self) -> &'static str {
+        match self {
+            Self::Home => "⌂",
+            Self::Panorama => "▣",
+            Self::Settings => "⚙",
+        }
+    }
 }
 
 struct Clip {
@@ -245,8 +258,45 @@ impl App {
                     (WARN, "Đang chờ màn hình")
                 };
                 pill(ui, color, text);
+                if self.media_job.is_some() || self.wallpaper_query.is_some() {
+                    ui.spinner();
+                    ui.label(RichText::new("Đang xử lý").small().color(DIM));
+                }
             });
         });
+        ui.add_space(6.0);
+    }
+
+    fn home_hero(&mut self, ui: &mut egui::Ui) {
+        egui::Frame::none()
+            .fill(CARD)
+            .stroke(Stroke::new(1.0_f32, BORDER))
+            .rounding(16.0)
+            .inner_margin(Margin::same(22.0))
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.vertical(|ui| {
+                        ui.label(RichText::new("TRYX PANORAMA").color(ACCENT).strong().size(13.0));
+                        ui.label(RichText::new("Không gian hiển thị của bạn").size(30.0).strong());
+                        ui.label(RichText::new("Chọn preset, nhập wallpaper và điều khiển màn hình từ một nơi.").color(DIM));
+                        ui.add_space(10.0);
+                        if primary_button(ui, "Mở điều khiển  →").clicked() {
+                            self.page = Page::Panorama;
+                        }
+                    });
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let (rect, _) = ui.allocate_exact_size(vec2(148.0, 88.0), egui::Sense::hover());
+                        ui.painter().rect_filled(rect, 13.0, Color32::from_rgb(11, 14, 19));
+                        ui.painter().rect_stroke(rect, 13.0, Stroke::new(2.0_f32, ACCENT.gamma_multiply(0.75)));
+                        ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, "2240 × 1080", egui::FontId::proportional(15.0), ACCENT);
+                    });
+                });
+                if self.alive() && self.state.connected {
+                    ui.add_space(14.0);
+                    ui.separator();
+                    info_row(ui, "Đang phát", &label_of(&self.cfg.playing));
+                }
+            });
         ui.add_space(6.0);
     }
 
@@ -431,22 +481,27 @@ impl eframe::App for App {
         egui::SidePanel::left("navigation")
             .resizable(false)
             .exact_width(if ctx.screen_rect().width() >= 1050.0 { 202.0 } else { 138.0 })
-            .frame(egui::Frame::none().fill(ACCENT).inner_margin(14.0))
+            .frame(egui::Frame::none().fill(SIDEBAR).inner_margin(14.0))
             .show(ctx, |ui| {
                 ui.add_space(10.0);
-                ui.label(RichText::new("KANALI").size(29.0).strong().color(BG));
-                ui.label(RichText::new("LITE").strong().color(BG));
-                ui.add_space(30.0);
+                ui.label(RichText::new("KANALI").size(27.0).strong().color(Color32::WHITE));
+                ui.label(RichText::new("LITE  •  PANORAMA").small().strong().color(ACCENT));
+                ui.add_space(28.0);
                 for page in [Page::Home, Page::Panorama, Page::Settings] {
                     let active = self.page == page;
-                    let label = RichText::new(page.title()).strong()
-                        .color(if active { ACCENT } else { BG });
-                    if ui.add_sized([ui.available_width(), 36.0],
-                        egui::Button::new(label).fill(if active { BG } else { ACCENT })
-                            .stroke(Stroke::NONE).rounding(4.0)).clicked() {
+                    let label = RichText::new(format!("{}   {}", page.icon(), page.title())).strong()
+                        .color(if active { Color32::BLACK } else { DIM });
+                    if ui.add_sized([ui.available_width(), 42.0],
+                        egui::Button::new(label).fill(if active { ACCENT } else { Color32::TRANSPARENT })
+                            .stroke(if active { Stroke::NONE } else { Stroke::new(1.0_f32, Color32::TRANSPARENT) }).rounding(10.0)).clicked() {
                         self.page = page;
                     }
                 }
+                ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
+                    ui.label(RichText::new(format!("v{}", env!("CARGO_PKG_VERSION"))).small().color(DIM));
+                    ui.label(RichText::new(if self.state.connected { "●  PANORAMA online" } else { "○  PANORAMA offline" })
+                        .small().color(if self.state.connected { GOOD } else { DIM }));
+                });
             });
 
         egui::CentralPanel::default()
@@ -457,16 +512,7 @@ impl eframe::App for App {
                     self.status_card(ui);
                     match self.page {
                         Page::Home => {
-                            card(ui, |ui| {
-                                ui.label(RichText::new("TRYX").color(ACCENT).strong());
-                                ui.label(RichText::new("PANORAMA").size(34.0).strong());
-                                if self.alive() && self.state.connected {
-                                    info_row(ui, "Video đã chọn", &label_of(&self.cfg.playing));
-                                }
-                                if primary_button(ui, "Điều khiển màn hình").clicked() {
-                                    self.page = Page::Panorama;
-                                }
-                            });
+                            self.home_hero(ui);
                             self.device_card(ui);
                         }
                         Page::Panorama => {
