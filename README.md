@@ -60,3 +60,4 @@ Trong **Customization → Wallpaper Engine**, chọn số màn hình PC (bắt �
 - Hai file đánh dấu để thử nghiệm trong `%APPDATA%\kanali-rs\`: `simple-play` (chỉ gửi lệnh phát tối giản) và `force-ffmpeg` (nhập video bằng FFmpeg thay vì MediaX).
 - Từ v0.2.15, video nhập mới dùng tên ngắn tương thích bộ phát của firmware. Hãy nhập lại từ nguồn; các video tên dài đã chép lên màn hình trước đó không tự được đổi tên.
 - Từ v0.2.16, giao diện dùng bảng màu tối mới, điều hướng gọn hơn, trạng thái kết nối và tiến trình tác vụ rõ ràng hơn.
+- Từ v0.2.17, ứng dụng tự dọn script `kanali-rs.vbs` lỗi thời trong Startup và chỉ dùng khóa `Run` trỏ đến chương trình hiện tại.

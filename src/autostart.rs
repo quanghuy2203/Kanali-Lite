@@ -5,7 +5,23 @@ const KEY: &str = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run";
 const NAME: &str = "KanaliRs";
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
+fn legacy_script() -> Option<std::path::PathBuf> {
+    Some(
+        std::path::PathBuf::from(std::env::var_os("APPDATA")?)
+            .join(r"Microsoft\Windows\Start Menu\Programs\Startup\kanali-rs.vbs"),
+    )
+}
+
+/// Older builds used a Startup-folder VBS containing an absolute build path.
+/// Once that executable moves, Windows shows a Script Host error at every login.
+pub fn cleanup_legacy() {
+    if let Some(path) = legacy_script() {
+        let _ = std::fs::remove_file(path);
+    }
+}
+
 pub fn set(enable: bool) -> Result<(), String> {
+    cleanup_legacy();
     let mut c = Command::new("reg");
     if enable {
         let exe = std::env::current_exe().map_err(|e| e.to_string())?;

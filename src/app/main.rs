@@ -40,6 +40,7 @@ fn main() {
     if let Ok(exe) = env::current_exe() {
         let _ = std::fs::remove_file(exe.with_extension("exe.old"));
     }
+    kanali_rs::autostart::cleanup_legacy();
 
     if has("--library") {library::run();return;}
     if has("--giphy") {
