@@ -31,7 +31,10 @@ struct Shared {
 
 impl Shared {
     fn new() -> Self {
-        let state = State { version: env!("CARGO_PKG_VERSION").to_string(), ..State::default() };
+        let state = State {
+            version: env!("CARGO_PKG_VERSION").to_string(),
+            ..State::default()
+        };
         Self {
             state: Mutex::new(state),
             found: Mutex::new(None),
@@ -88,12 +91,12 @@ fn worker(sh: Arc<Shared>) {
 }
 
 fn session(sh: &Arc<Shared>) -> Result<(), String> {
-    let session_start=config::now_ms();
+    let session_start = config::now_ms();
     let path = device::find_device()?;
     let mut f = device::open_device(&path)?;
     let replies = device::init_session(&mut f)?;
     let info = device::parse_info(&replies);
-    let serial=info.serial.clone();
+    let serial = info.serial.clone();
     let files = device::fetch_files(&mut f)?;
 
     let mut cfg = match config::load_opt::<Config>(&config::config_path()) {
@@ -105,7 +108,10 @@ fn session(sh: &Arc<Shared>) -> Result<(), String> {
         }
     };
     let present = |name: &str| files.iter().any(|p| p.rsplit('/').next() == Some(name));
-    if cfg.playing == config::DOWNLOAD_46 && !present(&cfg.playing) && present(config::FACTORY_VIDEO) {
+    if cfg.playing == config::DOWNLOAD_46
+        && !present(&cfg.playing)
+        && present(config::FACTORY_VIDEO)
+    {
         cfg.playing = config::FACTORY_VIDEO.into();
         config::save(&config::config_path(), &cfg).map_err(|e| e.to_string())?;
     }
@@ -117,19 +123,39 @@ fn session(sh: &Arc<Shared>) -> Result<(), String> {
         s.files = files;
     });
 
-    let request_path=config::data_dir().join("remove-request.json");
+    let request_path = config::data_dir().join("remove-request.json");
     let mut last_hb = Instant::now();
     let mut misses = 0u32;
     loop {
         thread::sleep(Duration::from_millis(400));
-        if let Some(req)=config::load_opt::<config::Removal>(&request_path){
-            if std::fs::remove_file(&request_path).is_ok(){
-                let result=if req.serial!=serial || req.requested_ms<session_start || config::now_ms().saturating_sub(req.requested_ms)>30_000 {
+        if let Some(req) = config::load_opt::<config::Removal>(&request_path) {
+            if std::fs::remove_file(&request_path).is_ok() {
+                let result = if req.serial != serial
+                    || req.requested_ms < session_start
+                    || config::now_ms().saturating_sub(req.requested_ms) > 30_000
+                {
                     Err("Yêu cầu xóa hết hạn sau khi đổi kết nối.".into())
-                }else{device::remove_media(&mut f,&req.path,&config::load_opt::<Config>(&config::config_path()).ok_or("Không đọc được cấu hình")?)};
-                match result{
-                    Ok(files)=>{let name=req.path.rsplit('/').next().unwrap_or("");let _=std::fs::remove_file(crate::media::poster(name));let _=std::fs::remove_file(crate::media::poster(name).with_extension("numbered.rgb"));sh.with(|s|{s.files=files;s.media_status=format!("Đã xóa {name}");});}
-                    Err(e)=>sh.with(|s|s.media_status=format!("Chưa xóa: {e}")),
+                } else {
+                    device::remove_media(
+                        &mut f,
+                        &req.path,
+                        &config::load_opt::<Config>(&config::config_path())
+                            .ok_or("Không đọc được cấu hình")?,
+                    )
+                };
+                match result {
+                    Ok(files) => {
+                        let name = req.path.rsplit('/').next().unwrap_or("");
+                        let _ = std::fs::remove_file(crate::media::poster(name));
+                        let _ = std::fs::remove_file(
+                            crate::media::poster(name).with_extension("numbered.rgb"),
+                        );
+                        sh.with(|s| {
+                            s.files = files;
+                            s.media_status = format!("Đã xóa {name}");
+                        });
+                    }
+                    Err(e) => sh.with(|s| s.media_status = format!("Chưa xóa: {e}")),
                 }
             }
         }
@@ -140,16 +166,26 @@ fn session(sh: &Arc<Shared>) -> Result<(), String> {
             let expected_size = std::fs::metadata(&path).map_err(|e| e.to_string())?.len();
             let result = device::upload(&mut f, &path, &name, |done, total| {
                 if last.elapsed() >= Duration::from_millis(500) {
-                    sh.with(|s| s.media_status = format!("Đang gửi {name} · {}%", done * 100 / total));
+                    sh.with(|s| {
+                        s.media_status = format!("Đang gửi {name} · {}%", done * 100 / total)
+                    });
                     last = Instant::now();
                 }
-            }).and_then(|_| device::verify_upload(&mut f, &name, expected_size)).and_then(|files| {
-                sh.with(|s| { s.files = files; s.media_status = format!("Đã thêm {name}"); });
+            })
+            .and_then(|_| device::verify_upload(&mut f, &name, expected_size))
+            .and_then(|files| {
+                sh.with(|s| {
+                    s.files = files;
+                    s.media_status = format!("Đã thêm {name}");
+                });
                 Ok(())
             });
             std::fs::remove_file(&path).map_err(|e| e.to_string())?;
             if let Err(e) = result {
-                sh.with(|s| s.media_status = format!("Không gửi được {name}: {e}. Có thể chọn lại tệp nguồn."));
+                sh.with(|s| {
+                    s.media_status =
+                        format!("Không gửi được {name}: {e}. Có thể chọn lại tệp nguồn.")
+                });
                 return Err(e);
             }
         }
@@ -159,16 +195,22 @@ fn session(sh: &Arc<Shared>) -> Result<(), String> {
             sh.with(|s| s.files = files);
         }
         if let Some(new) = config::load_opt::<Config>(&config::config_path()) {
-            if sh.reapply.swap(false, Ordering::Relaxed) || new.playing != cfg.playing
+            if sh.reapply.swap(false, Ordering::Relaxed)
+                || new.playing != cfg.playing
                 || new.poweron != cfg.poweron
                 || new.standby != cfg.standby
-                || new.level != cfg.level || new.layout != cfg.layout
+                || new.level != cfg.level
+                || new.layout != cfg.layout
             {
                 match device::apply_play(&mut f, &new) {
                     Ok(()) => {
-                        sh.with(|s| s.message = format!("PANORAMA đã nhận cấu hình phát {}", new.playing));
+                        sh.with(|s| {
+                            s.message = format!("PANORAMA đã nhận cấu hình phát {}", new.playing)
+                        });
                     }
-                    Err(e) => { sh.with(|s| s.message = e); }
+                    Err(e) => {
+                        sh.with(|s| s.message = e);
+                    }
                 }
                 // Cho màn hình thời gian nạp video mới trước nhịp heartbeat kế tiếp.
                 last_hb = Instant::now();
@@ -199,6 +241,8 @@ fn session(sh: &Arc<Shared>) -> Result<(), String> {
 fn control(sh: Arc<Shared>) {
     let mut last_check: Option<Instant> = None;
     let mut last_pub = Instant::now();
+    let mut last_lighting = Instant::now() - Duration::from_secs(30);
+    let mut monitor = crate::system::Monitor::new();
     loop {
         thread::sleep(Duration::from_millis(500));
         match config::take_command().as_deref() {
@@ -213,6 +257,27 @@ fn control(sh: Arc<Shared>) {
             }
             Some("apply") => sh.reapply.store(true, Ordering::Relaxed),
             Some("refresh") => sh.refresh.store(true, Ordering::Relaxed),
+            Some("lighting-scan") => {
+                monitor.refresh_lighting();
+                let lighting = monitor.lighting.clone();
+                sh.with(|s| s.lighting = lighting);
+            }
+            Some("lighting-takeover") => {
+                let result = crate::system::take_over_and_off();
+                monitor.refresh_lighting();
+                monitor.lighting.message =
+                    result.unwrap_or_else(|e| format!("Không thể giành quyền: {e}"));
+                let lighting = monitor.lighting.clone();
+                sh.with(|s| s.lighting = lighting);
+            }
+            Some("lighting-release") => {
+                let result = crate::system::release();
+                monitor.refresh_lighting();
+                monitor.lighting.message =
+                    result.unwrap_or_else(|e| format!("Không thể trả quyền: {e}"));
+                let lighting = monitor.lighting.clone();
+                sh.with(|s| s.lighting = lighting);
+            }
             _ => {}
         }
         let due = last_check.map_or(true, |t| t.elapsed() > Duration::from_secs(6 * 3600));
@@ -223,7 +288,16 @@ fn control(sh: Arc<Shared>) {
         }
         // Làm mới dấu thời gian để giao diện biết tiến trình nền còn sống.
         if last_pub.elapsed() >= Duration::from_secs(2) {
-            sh.with(|_| {});
+            let telemetry = monitor.sample();
+            if last_lighting.elapsed() >= Duration::from_secs(10) {
+                monitor.refresh_lighting();
+                last_lighting = Instant::now();
+            }
+            let lighting = monitor.lighting.clone();
+            sh.with(|s| {
+                s.telemetry = telemetry;
+                s.lighting = lighting;
+            });
             last_pub = Instant::now();
         }
     }
@@ -283,10 +357,16 @@ fn do_update(sh: &Arc<Shared>) {
     });
     match res.and_then(|_| {
         let exe = launch_path.map_err(|e| e.to_string())?;
-        Command::new(exe).arg("--after-update").spawn().map_err(|e| format!("Không thể mở bản mới: {e}"))
+        Command::new(exe)
+            .arg("--after-update")
+            .spawn()
+            .map_err(|e| format!("Không thể mở bản mới: {e}"))
     }) {
         Ok(_) => {
-            sh.with(|s| { s.update.restart = true; s.update.status = "Đang khởi động lại".into(); });
+            sh.with(|s| {
+                s.update.restart = true;
+                s.update.status = "Đang khởi động lại".into();
+            });
             // Giao diện đọc state.json mỗi giây. Chờ nó nhả khóa trước khi bàn giao daemon.
             let _ = config::acquire_lock("ui.lock", Duration::from_secs(5));
             std::process::exit(0);
@@ -305,20 +385,21 @@ fn do_update(sh: &Arc<Shared>) {
 
 fn make_icon(rgb: (u8, u8, u8)) -> Icon {
     let n = 32usize;
-    let mut px = Vec::with_capacity(n * n * 4);
-    for y in 0..n {
-        for x in 0..n {
-            let dx = x as f32 - 15.5;
-            let dy = y as f32 - 15.5;
-            let d = (dx * dx + dy * dy).sqrt();
-            if d < 5.0 {
-                px.extend_from_slice(&[255, 255, 255, 255]);
-            } else if d < 14.0 {
-                px.extend_from_slice(&[rgb.0, rgb.1, rgb.2, 255]);
-            } else if d < 15.0 {
-                px.extend_from_slice(&[rgb.0, rgb.1, rgb.2, ((15.0 - d) * 255.0) as u8]);
-            } else {
-                px.extend_from_slice(&[0, 0, 0, 0]);
+    let img = image::load_from_memory(include_bytes!("../../assets/kanali-logo.png"))
+        .expect("logo")
+        .resize_exact(n as u32, n as u32, image::imageops::FilterType::Lanczos3)
+        .into_rgba8();
+    let mut px = img.into_raw();
+    for y in 23..31 {
+        for x in 23..31 {
+            let dx = x as f32 - 26.5;
+            let dy = y as f32 - 26.5;
+            if dx * dx + dy * dy < 12.0 {
+                let i = (y * n + x) * 4;
+                px[i] = rgb.0;
+                px[i + 1] = rgb.1;
+                px[i + 2] = rgb.2;
+                px[i + 3] = 255;
             }
         }
     }
@@ -391,9 +472,16 @@ pub fn run(_lock: File) {
         };
         if ok != last_ok {
             last_ok = ok;
-            let _ = tray.set_icon(Some(if ok { icon_ok.clone() } else { icon_wait.clone() }));
+            let _ = tray.set_icon(Some(if ok {
+                icon_ok.clone()
+            } else {
+                icon_wait.clone()
+            }));
         }
-        let tip = format!("Kanali — {msg}{}", if upd { " (có bản cập nhật)" } else { "" });
+        let tip = format!(
+            "Kanali — {msg}{}",
+            if upd { " (có bản cập nhật)" } else { "" }
+        );
         if tip != last_tip {
             let _ = tray.set_tooltip(Some(tip.as_str()));
             last_tip = tip;

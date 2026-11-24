@@ -6,11 +6,12 @@
 #![windows_subsystem = "windows"]
 
 mod daemon;
-mod media;
-mod mediax;
 mod giphy;
 mod library;
+mod media;
+mod mediax;
 mod presets;
+mod system;
 mod ui;
 
 use std::{env, process::Command, time::Duration};
@@ -42,9 +43,17 @@ fn main() {
     }
     kanali_rs::autostart::cleanup_legacy();
 
-    if has("--library") {library::run();return;}
+    if has("--library") {
+        library::run();
+        return;
+    }
     if has("--giphy") {
-        if let Err(error) = giphy::browse() { rfd::MessageDialog::new().set_title("GIPHY").set_description(error).show(); }
+        if let Err(error) = giphy::browse() {
+            rfd::MessageDialog::new()
+                .set_title("GIPHY")
+                .set_description(error)
+                .show();
+        }
         return;
     }
 
@@ -55,7 +64,11 @@ fn main() {
 
     let quiet = has("--background");
     // Sau khi cập nhật, tiến trình cũ cần vài giây để nhả khóa.
-    let wait = if quiet || has("--after-update") { Duration::from_secs(8) } else { Duration::from_millis(300) };
+    let wait = if quiet || has("--after-update") {
+        Duration::from_secs(8)
+    } else {
+        Duration::from_millis(300)
+    };
 
     match config::acquire_lock("daemon.lock", wait) {
         Some(lock) => {
@@ -65,8 +78,11 @@ fn main() {
             daemon::run(lock);
         }
         None => {
-            if !quiet && config::load_opt::<config::State>(&config::state_path())
-                .is_some_and(|s| !s.version.is_empty() && s.version != env!("CARGO_PKG_VERSION")) {
+            if !quiet
+                && config::load_opt::<config::State>(&config::state_path()).is_some_and(|s| {
+                    !s.version.is_empty() && s.version != env!("CARGO_PKG_VERSION")
+                })
+            {
                 rfd::MessageDialog::new().set_title("Đang chạy Kanali Lite phiên bản cũ")
                     .set_description("Chọn Thoát trên biểu tượng Kanali Lite ở khay hệ thống, rồi mở lại bản mới để sử dụng các sửa lỗi USB.")
                     .show();
