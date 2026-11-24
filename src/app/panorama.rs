@@ -1,6 +1,17 @@
 use super::*;
 use egui::{Align2, FontId, Rect, Sense};
 
+const PREVIEW_FRAME_MS: u128 = 167;
+
+fn segment(ui: &mut egui::Ui, selected: bool, text: &str) -> egui::Response {
+    ui.add(
+        egui::Button::new(RichText::new(text).strong().color(if selected { Color32::BLACK } else { DIM }))
+            .fill(if selected { ACCENT } else { Color32::from_rgb(30, 36, 45) })
+            .stroke(Stroke::new(1.0_f32, if selected { ACCENT } else { BORDER }))
+            .rounding(9.0),
+    )
+}
+
 fn title_for(name: &str) -> String {
     crate::presets::title(name)
         .map(str::to_owned)
@@ -33,7 +44,8 @@ impl App {
                             })
                     })?;
             let size = dimensions[0] * dimensions[1] * 3;
-            if frames.is_empty() || frames.len() > size * 8 || frames.len() % size != 0 {
+            // Bound decoded preview memory to 12 small RGB frames (~1 MiB/file).
+            if frames.is_empty() || frames.len() > size * 12 || frames.len() % size != 0 {
                 return None;
             }
             let texture = ui.ctx().load_texture(
@@ -53,7 +65,7 @@ impl App {
         let size = clip.dimensions[0] * clip.dimensions[1] * 3;
         let count = clip.frames.len() / size;
         if animate && count > 1 {
-            let i = (clip.start.elapsed().as_millis() / 500) as usize % count;
+            let i = (clip.start.elapsed().as_millis() / PREVIEW_FRAME_MS) as usize % count;
             if i != clip.current {
                 clip.texture.set(
                     egui::ColorImage::from_rgb(
@@ -64,7 +76,7 @@ impl App {
                 );
                 clip.current = i;
             }
-            ui.ctx().request_repaint_after(Duration::from_millis(500));
+            ui.ctx().request_repaint_after(Duration::from_millis(PREVIEW_FRAME_MS as u64));
         }
         let aspect = clip.dimensions[0] as f32 / clip.dimensions[1] as f32;
         let width = rect.width().min(rect.height() * aspect);
@@ -79,9 +91,11 @@ impl App {
     }
 
     fn stage(&mut self, ui: &mut egui::Ui, rect: Rect, name: &str, focus: bool) {
+        let response = ui.interact(rect, ui.id().with(("preview-stage", name)), Sense::hover());
+        let glow = ui.ctx().animate_bool(response.id, focus || response.hovered());
         let p = ui.painter();
-        p.rect_filled(rect, 8., Color32::from_rgb(14, 16, 19));
-        if !self.artwork(ui, name, rect.shrink(3.), focus) {
+        p.rect_filled(rect, 13., Color32::from_rgb(8, 11, 15));
+        if !self.artwork(ui, name, rect.shrink(5.), focus) {
             ui.painter().text(
                 rect.center(),
                 Align2::CENTER_CENTER,
@@ -95,21 +109,28 @@ impl App {
             );
         }
         if !name.is_empty() {
-            let band = Rect::from_min_max(rect.min, egui::pos2(rect.right(), rect.top() + 26.));
+            let band = Rect::from_min_max(egui::pos2(rect.left(), rect.bottom() - 34.), rect.max);
             ui.painter()
-                .rect_filled(band, 4., Color32::from_black_alpha(176));
+                .rect_filled(band, 10., Color32::from_black_alpha(205));
             ui.painter().text(
-                band.left_center() + vec2(9., 0.),
+                band.left_center() + vec2(12., 0.),
                 Align2::LEFT_CENTER,
                 short(&title_for(name), (band.width() / 8.) as usize),
-                FontId::proportional(14.),
+                FontId::proportional(13.5),
                 Color32::WHITE,
+            );
+            ui.painter().text(
+                band.right_center() - vec2(12., 0.),
+                Align2::RIGHT_CENTER,
+                if focus { "LIVE PREVIEW" } else { "2240 × 1080" },
+                FontId::proportional(11.0),
+                if focus { ACCENT } else { DIM },
             );
         }
         ui.painter().rect_stroke(
             rect,
-            8.,
-            Stroke::new(1.0_f32, if focus { ACCENT } else { BORDER }),
+            13.,
+            Stroke::new(1.0_f32 + glow, if focus { ACCENT } else { BORDER }),
         );
     }
 
@@ -189,8 +210,8 @@ impl App {
     pub(super) fn panorama_header(&mut self, ui: &mut egui::Ui) {
         ui.horizontal_wrapped(|ui| {
             ui.heading("PANORAMA");
-            ui.selectable_value(&mut self.display_tab, false, "Preset");
-            ui.selectable_value(&mut self.display_tab, true, "Customization");
+            if segment(ui, !self.display_tab, "Preset").clicked() { self.display_tab = false; }
+            if segment(ui, self.display_tab, "Tùy chỉnh").clicked() { self.display_tab = true; }
             ui.checkbox(&mut self.draft.enabled, "Screen");
             let available = |name: &str| self.state.files.iter().any(|p| file_of(p) == name);
             let valid = if !self.display_tab {
@@ -259,19 +280,22 @@ impl App {
             .map(|p| file_of(p).to_owned())
             .collect();
         if self.display_tab {
-            ui.horizontal_wrapped(|ui| {
-                ui.radio_value(&mut self.draft.split, false, "Full Screen");
-                ui.radio_value(&mut self.draft.split, true, "Screen Splitting");
-                egui::ComboBox::from_label("Play Mode")
-                    .selected_text(
-                        ["Single", "Loop", "Shuffle"][self.draft.loop_mode.min(2) as usize],
-                    )
-                    .show_ui(ui, |ui| {
-                        for (i, label) in ["Single", "Loop", "Shuffle"].iter().enumerate() {
-                            ui.selectable_value(&mut self.draft.loop_mode, i as u64, *label);
+            egui::Frame::none().fill(CARD).stroke(Stroke::new(1.0_f32, BORDER))
+                .rounding(12.0).inner_margin(Margin::symmetric(14.0, 10.0)).show(ui, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(RichText::new("BỐ CỤC").small().strong().color(DIM));
+                    if segment(ui, !self.draft.split, "Toàn màn hình").clicked() { self.draft.split = false; }
+                    if segment(ui, self.draft.split, "Chia đôi").clicked() { self.draft.split = true; }
+                    ui.separator();
+                    ui.label(RichText::new("CHẾ ĐỘ PHÁT").small().strong().color(DIM));
+                    for (i, label) in ["Một lần", "Lặp", "Ngẫu nhiên"].iter().enumerate() {
+                        if segment(ui, self.draft.loop_mode == i as u64, label).clicked() {
+                            self.draft.loop_mode = i as u64;
                         }
-                    });
+                    }
+                });
             });
+            ui.add_space(8.0);
             let w = ui.available_width();
             let h = (w * 0.26).clamp(145., 245.);
             let (area, _) = ui.allocate_exact_size(vec2(w, h), Sense::hover());

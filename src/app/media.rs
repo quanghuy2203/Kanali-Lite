@@ -114,9 +114,11 @@ fn make_poster_at(source: &Path, name: &str, start: f64) -> Result<(), String> {
     let tmp = tempfile::NamedTempFile::new_in(dir)
         .map_err(|e| e.to_string())?
         .into_temp_path();
-    run(ffmpeg().arg("-i").arg(source).args(["-ss", &start.to_string(), "-t","4","-frames:v","8","-vf","fps=2:round=up,scale=240:116:force_original_aspect_ratio=decrease,pad=240:116:(ow-iw)/2:(oh-ih)/2","-pix_fmt","rgb24","-f","rawvideo"]).arg(&*tmp))?;
+    // 6 fps is visibly smoother than the old 2 fps preview while keeping each
+    // 240x116 preview near 1 MiB (12 RGB frames) and cheap to upload to the GPU.
+    run(ffmpeg().arg("-i").arg(source).args(["-ss", &start.to_string(), "-t","2","-frames:v","12","-vf","fps=6:round=up,scale=240:116:force_original_aspect_ratio=decrease,pad=240:116:(ow-iw)/2:(oh-ih)/2","-pix_fmt","rgb24","-f","rawvideo"]).arg(&*tmp))?;
     let len = fs::metadata(&tmp).map_err(|e| e.to_string())?.len();
-    if len == 0 || len > 8 * 240 * 116 * 3 || len % (240 * 116 * 3) != 0 {
+    if len == 0 || len > 12 * 240 * 116 * 3 || len % (240 * 116 * 3) != 0 {
         return Err("Không đọc được hình xem trước".into());
     }
     tmp.persist(poster(name)).map_err(|e| e.to_string())?;
@@ -622,6 +624,7 @@ mod capture_tests {
         assert!(frames.windows(2).all(|pair| pair[0] != pair[1]));
         assert_eq!(first_picture(&clip).unwrap(), Some(0.0));
         make_poster(&clip, "test.mp4").unwrap();
+        assert_eq!(fs::metadata(poster("test.mp4")).unwrap().len(), 240 * 116 * 3 * 12);
     }
     #[test]
     fn rejects_black_but_accepts_dark_scene_after_fade() {

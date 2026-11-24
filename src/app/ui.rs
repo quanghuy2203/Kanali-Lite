@@ -44,12 +44,19 @@ pub fn run() {
 }
 
 pub(super) fn setup(ctx: &egui::Context) {
-    // Font Segoe UI có đủ dấu tiếng Việt; không có thì dùng font mặc định.
+    // Segoe UI keeps native Windows rendering and full Vietnamese coverage.
     if let Ok(bytes) = std::fs::read(r"C:\Windows\Fonts\segoeui.ttf") {
         let mut fonts = egui::FontDefinitions::default();
         fonts.font_data.insert("segoe".to_owned(), egui::FontData::from_owned(bytes));
         if let Some(list) = fonts.families.get_mut(&egui::FontFamily::Proportional) {
             list.insert(0, "segoe".to_owned());
+        }
+        if let Ok(bytes) = std::fs::read(r"C:\Windows\Fonts\seguisb.ttf") {
+            fonts.font_data.insert("segoe-semibold".to_owned(), egui::FontData::from_owned(bytes));
+            fonts.families.insert(
+                egui::FontFamily::Name("segoe-semibold".into()),
+                vec!["segoe-semibold".to_owned(), "segoe".to_owned()],
+            );
         }
         ctx.set_fonts(fonts);
     }
@@ -72,7 +79,9 @@ pub(super) fn setup(ctx: &egui::Context) {
     ctx.set_visuals(v);
     ctx.style_mut(|s| {
         s.text_styles.insert(egui::TextStyle::Body,egui::FontId::proportional(15.0));
-        s.text_styles.insert(egui::TextStyle::Button,egui::FontId::proportional(15.0));
+        let semibold = egui::FontFamily::Name("segoe-semibold".into());
+        s.text_styles.insert(egui::TextStyle::Button,egui::FontId::new(14.5, semibold.clone()));
+        s.text_styles.insert(egui::TextStyle::Heading,egui::FontId::new(24.0, semibold));
         s.spacing.interact_size.y=36.;
         s.spacing.item_spacing = vec2(10.0, 10.0);
         s.spacing.button_padding = vec2(15.0, 8.0);
@@ -135,6 +144,24 @@ fn info_row(ui: &mut egui::Ui, key: &str, value: &str) {
     });
 }
 
+fn metric_card(ui: &mut egui::Ui, label: &str, value: &str, detail: &str, color: Color32) {
+    egui::Frame::none()
+        .fill(CARD)
+        .stroke(Stroke::new(1.0_f32, BORDER))
+        .rounding(13.0)
+        .inner_margin(Margin::same(14.0))
+        .show(ui, |ui| {
+            ui.set_min_height(76.0);
+            ui.horizontal(|ui| {
+                let (dot, _) = ui.allocate_exact_size(vec2(8.0, 8.0), egui::Sense::hover());
+                ui.painter().circle_filled(dot.center(), 4.0, color);
+                ui.label(RichText::new(label).small().color(DIM));
+            });
+            ui.label(RichText::new(value).size(22.0).strong().color(Color32::WHITE));
+            ui.label(RichText::new(detail).small().color(DIM));
+        });
+}
+
 fn file_of(path: &str) -> &str {
     path.rsplit('/').next().unwrap_or(path)
 }
@@ -186,13 +213,6 @@ impl Page {
         }
     }
 
-    fn icon(self) -> &'static str {
-        match self {
-            Self::Home => "⌂",
-            Self::Panorama => "▣",
-            Self::Settings => "⚙",
-        }
-    }
 }
 
 struct Clip {
@@ -298,6 +318,36 @@ impl App {
                 }
             });
         ui.add_space(6.0);
+    }
+
+    fn home_dashboard(&self, ui: &mut egui::Ui) {
+        let info = self.state.info.as_ref();
+        let user_media = self.state.files.iter()
+            .filter(|p| p.contains("/media/") || p.contains("/user/"))
+            .count();
+        let status = if !self.alive() {
+            ("Offline", "Dịch vụ nền chưa chạy", BAD)
+        } else if self.state.connected {
+            ("Online", "USB đang phản hồi", GOOD)
+        } else {
+            ("Đang chờ", "Kiểm tra cáp USB", WARN)
+        };
+        let resolution = info.map(|i| i.resolution.as_str()).filter(|s| !s.is_empty()).unwrap_or("—");
+        let metrics = [
+            ("KẾT NỐI", status.0.to_owned(), status.1.to_owned(), status.2),
+            ("ĐỘ PHÂN GIẢI", resolution.to_owned(), "PANORAMA canvas".to_owned(), ACCENT),
+            ("MEDIA CÁ NHÂN", user_media.to_string(), format!("{} tệp trên thiết bị", self.state.files.len()), Color32::from_rgb(96, 165, 250)),
+            ("ĐỘ SÁNG", format!("{}%", self.cfg.level), "Mức đang áp dụng".to_owned(), Color32::from_rgb(244, 180, 0)),
+        ];
+        let columns = if ui.available_width() >= 760.0 { 4 } else { 2 };
+        for row in metrics.chunks(columns) {
+            ui.columns(columns, |cols| {
+                for (col, (label, value, detail, color)) in cols.iter_mut().zip(row.iter()) {
+                    metric_card(col, label, value, detail, *color);
+                }
+            });
+            ui.add_space(4.0);
+        }
     }
 
     fn status_card(&mut self, ui: &mut egui::Ui) {
@@ -489,7 +539,7 @@ impl eframe::App for App {
                 ui.add_space(28.0);
                 for page in [Page::Home, Page::Panorama, Page::Settings] {
                     let active = self.page == page;
-                    let label = RichText::new(format!("{}   {}", page.icon(), page.title())).strong()
+                    let label = RichText::new(page.title()).strong()
                         .color(if active { Color32::BLACK } else { DIM });
                     if ui.add_sized([ui.available_width(), 42.0],
                         egui::Button::new(label).fill(if active { ACCENT } else { Color32::TRANSPARENT })
@@ -499,8 +549,9 @@ impl eframe::App for App {
                 }
                 ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
                     ui.label(RichText::new(format!("v{}", env!("CARGO_PKG_VERSION"))).small().color(DIM));
-                    ui.label(RichText::new(if self.state.connected { "●  PANORAMA online" } else { "○  PANORAMA offline" })
-                        .small().color(if self.state.connected { GOOD } else { DIM }));
+                    let online = self.alive() && self.state.connected;
+                    ui.label(RichText::new(if online { "PANORAMA online" } else { "PANORAMA offline" })
+                        .small().color(if online { GOOD } else { DIM }));
                 });
             });
 
@@ -513,6 +564,7 @@ impl eframe::App for App {
                     match self.page {
                         Page::Home => {
                             self.home_hero(ui);
+                            self.home_dashboard(ui);
                             self.device_card(ui);
                         }
                         Page::Panorama => {
