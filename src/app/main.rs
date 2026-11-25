@@ -42,6 +42,11 @@ fn main() {
         let _ = std::fs::remove_file(exe.with_extension("exe.old"));
     }
     kanali_rs::autostart::cleanup_legacy();
+    if config::load_opt::<config::Config>(&config::config_path()).is_some_and(|c| c.autostart)
+        && !kanali_rs::autostart::is_enabled()
+    {
+        let _ = kanali_rs::autostart::set(true);
+    }
 
     if has("--library") {
         library::run();

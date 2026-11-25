@@ -1,8 +1,9 @@
-//! Bật/tắt tự khởi động cùng Windows (HKCU\...\Run), không cần quyền admin.
+//! Startup through Task Scheduler so an elevated app starts after logon without another UAC prompt.
 use std::{os::windows::process::CommandExt, process::Command};
 
 const KEY: &str = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run";
-const NAME: &str = "KanaliRs";
+const OLD_NAME: &str = "KanaliRs";
+const TASK: &str = "Kanali Lite";
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 fn legacy_script() -> Option<std::path::PathBuf> {
@@ -22,25 +23,26 @@ pub fn cleanup_legacy() {
 
 pub fn set(enable: bool) -> Result<(), String> {
     cleanup_legacy();
-    let mut c = Command::new("reg");
+    let _ = Command::new("reg.exe").args(["delete", KEY, "/v", OLD_NAME, "/f"])
+        .creation_flags(CREATE_NO_WINDOW).output();
     if enable {
         let exe = std::env::current_exe().map_err(|e| e.to_string())?;
         let value = format!("\"{}\" --background", exe.display());
-        c.args(["add", KEY, "/v", NAME, "/t", "REG_SZ", "/d", value.as_str(), "/f"]);
+        let out=Command::new("schtasks.exe").args(["/Create","/TN",TASK,"/SC","ONLOGON","/RL","HIGHEST","/DELAY","0000:10","/TR",&value,"/F"])
+            .creation_flags(CREATE_NO_WINDOW).output().map_err(|e|e.to_string())?;
+        if out.status.success(){return Ok(())}
+        return Err(format!("Không tạo được tác vụ khởi động quyền cao nhất: {}",String::from_utf8_lossy(&out.stderr).trim()));
     } else {
-        c.args(["delete", KEY, "/v", NAME, "/f"]);
-    }
-    let out = c.creation_flags(CREATE_NO_WINDOW).output().map_err(|e| e.to_string())?;
-    if out.status.success() || !enable {
-        Ok(())
-    } else {
-        Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
+        let out=Command::new("schtasks.exe").args(["/Delete","/TN",TASK,"/F"])
+            .creation_flags(CREATE_NO_WINDOW).output().map_err(|e|e.to_string())?;
+        if out.status.success() || !is_enabled(){return Ok(())}
+        return Err(String::from_utf8_lossy(&out.stderr).trim().into());
     }
 }
 
 pub fn is_enabled() -> bool {
-    Command::new("reg")
-        .args(["query", KEY, "/v", NAME])
+    Command::new("schtasks.exe")
+        .args(["/Query", "/TN", TASK])
         .creation_flags(CREATE_NO_WINDOW)
         .output()
         .map(|o| o.status.success())

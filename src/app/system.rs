@@ -69,10 +69,12 @@ impl Monitor {
         let mut out = Telemetry {
             cpu,
             memory,
+            memory_used_gb:(mem.ullTotalPhys.saturating_sub(mem.ullAvailPhys)) as f32/1_073_741_824.0,
+            memory_total_gb:mem.ullTotalPhys as f32/1_073_741_824.0,
             ..Default::default()
         };
         if let Some(nv) = &self.nvml {
-            use nvml_wrapper::enum_wrappers::device::TemperatureSensor;
+            use nvml_wrapper::enum_wrappers::device::{Clock,TemperatureSensor};
             if let Ok(g) = nv.device_by_index(0) {
                 out.gpu = g
                     .utilization_rates()
@@ -80,6 +82,9 @@ impl Monitor {
                     .unwrap_or(0);
                 out.gpu_temp = g.temperature(TemperatureSensor::Gpu).ok();
                 out.gpu_power_w = g.power_usage().ok().map(|v| v as f32 / 1000.0);
+                if let Ok(m)=g.memory_info(){out.gpu_memory_used_gb=Some(m.used as f32/1_073_741_824.0);out.gpu_memory_total_gb=Some(m.total as f32/1_073_741_824.0);}
+                out.gpu_clock_mhz=g.clock_info(Clock::Graphics).ok();
+                out.gpu_fan=g.fan_speed(0).ok();
             }
         }
         out
@@ -187,18 +192,26 @@ impl Empty for String {
 }
 
 pub fn take_over_and_off() -> Result<String, String> {
-    sc("stop", "LConnectServiceWatcher")?;
-    sc("stop", "LConnectService")?;
-    let status = Command::new(OPENRGB)
-        .args(["--mode", "off"])
+    if service_running("LConnectServiceWatcher") { sc("stop", "LConnectServiceWatcher")?; }
+    if service_running("LConnectService") { sc("stop", "LConnectService")?; }
+    // L-Connect leaves its bundled OpenRGB worker alive after its service stops.
+    let _=Command::new("taskkill.exe").args(["/IM","OpenRGB.exe","/F"]).creation_flags(HIDDEN).output();
+    std::thread::sleep(std::time::Duration::from_millis(700));
+    // "off" is not a portable OpenRGB mode. Black + zero brightness works for
+    // both Direct and Static controllers and applies to every detected device.
+    let mut child = Command::new(OPENRGB)
+        .args(["--noautoconnect", "--color", "000000", "--brightness", "0"])
         .creation_flags(HIDDEN)
-        .status()
+        .spawn()
         .map_err(|e| format!("Không mở được OpenRGB: {e}"))?;
-    if status.success() {
-        Ok("Đã giành quyền và gửi lệnh tắt đèn".into())
-    } else {
-        Err("OpenRGB chưa thể điều khiển thiết bị này".into())
+    for _ in 0..40 {
+        if let Some(status)=child.try_wait().map_err(|e|e.to_string())? {
+            return if status.success(){Ok("Đã giành quyền và đặt toàn bộ LED về 0% / màu đen".into())}else{Err("OpenRGB không tìm thấy bộ điều khiển tương thích".into())};
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
     }
+    let _=child.kill();
+    Ok("Đã gửi lệnh tắt LED; OpenRGB được đóng sau khi áp dụng".into())
 }
 
 pub fn release() -> Result<String, String> {

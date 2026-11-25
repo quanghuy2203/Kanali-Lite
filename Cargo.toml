@@ -1,6 +1,6 @@
 [package]
 name = "kanali-rs"
-version = "0.2.19"
+version = "0.2.20"
 default-run = "kanali"
 edition = "2021"
 description = "Điều khiển màn hình Tryx Panorama: nhẹ RAM, có giao diện và tự cập nhật"
@@ -47,7 +47,10 @@ image = {version = "0.25", default-features = false, features = ["png","jpeg","w
 
 [dependencies.windows]
 version = "0.58"
-features = ["Win32_Foundation","Win32_UI_WindowsAndMessaging","Win32_System_SystemInformation","Win32_System_Threading", "Win32_System_IO", "Win32_Devices_DeviceAndDriverInstallation"]
+features = ["Win32_Foundation","Win32_UI_WindowsAndMessaging","Win32_UI_Shell","Win32_System_SystemInformation","Win32_System_Threading", "Win32_System_IO", "Win32_Devices_DeviceAndDriverInstallation"]
+
+[build-dependencies]
+winresource = "0.1"
 
 [profile.release]
 opt-level = "z"

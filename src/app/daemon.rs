@@ -2,7 +2,6 @@
 //! áp dụng cấu hình, kiểm tra và cài cập nhật.
 use std::{
     fs::File,
-    process::Command,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc, Mutex,
@@ -357,10 +356,7 @@ fn do_update(sh: &Arc<Shared>) {
     });
     match res.and_then(|_| {
         let exe = launch_path.map_err(|e| e.to_string())?;
-        Command::new(exe)
-            .arg("--after-update")
-            .spawn()
-            .map_err(|e| format!("Không thể mở bản mới: {e}"))
+        launch_updated(&exe)
     }) {
         Ok(_) => {
             sh.with(|s| {
@@ -379,6 +375,15 @@ fn do_update(sh: &Arc<Shared>) {
             sh.updating.store(false, Ordering::SeqCst);
         }
     }
+}
+
+fn launch_updated(exe: &std::path::Path) -> Result<(), String> {
+    use windows::{core::HSTRING, Win32::{Foundation::HWND, UI::{Shell::ShellExecuteW, WindowsAndMessaging::SW_SHOWNORMAL}}};
+    let verb=HSTRING::from("runas");
+    let file=HSTRING::from(exe.as_os_str());
+    let args=HSTRING::from("--after-update");
+    let result=unsafe { ShellExecuteW(HWND(std::ptr::null_mut()),&verb,&file,&args,None,SW_SHOWNORMAL) };
+    if result.0 as isize > 32 { Ok(()) } else { Err(format!("Không thể mở bản mới với quyền quản trị (mã {})",result.0 as isize)) }
 }
 
 // ---------------- khay hệ thống ----------------

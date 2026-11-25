@@ -298,6 +298,7 @@ struct App {
     notice: String,
     confirm_takeover: bool,
     logo: Option<egui::TextureHandle>,
+    scroll_top: bool,
 }
 
 impl App {
@@ -332,6 +333,7 @@ impl App {
             notice: String::new(),
             confirm_takeover: false,
             logo: None,
+            scroll_top: true,
         }
     }
 
@@ -373,7 +375,7 @@ impl App {
     }
 
     fn home_hero(&mut self, ui: &mut egui::Ui) {
-        egui::Frame::none()
+        let hero = egui::Frame::none()
             .fill(CARD)
             .stroke(Stroke::new(1.0_f32, BORDER))
             .rounding(16.0)
@@ -401,6 +403,7 @@ impl App {
                         ui.add_space(10.0);
                         if primary_button(ui, "Mở điều khiển  →").clicked() {
                             self.page = Page::Panorama;
+                            self.scroll_top = true;
                         }
                     });
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -428,6 +431,20 @@ impl App {
                     info_row(ui, "Đang phát", &label_of(&self.cfg.playing));
                 }
             });
+        let phase = ((ui.ctx().input(|i| i.time) * 0.16) % 1.0) as f32;
+        let x = egui::lerp(hero.response.rect.left()..=hero.response.rect.right(), phase);
+        ui.painter().circle_filled(
+            egui::pos2(x, hero.response.rect.top() + 1.0),
+            24.0,
+            ACCENT.gamma_multiply(0.07),
+        );
+        ui.painter().line_segment(
+            [
+                egui::pos2(hero.response.rect.left() + 16.0, hero.response.rect.top()),
+                egui::pos2(x, hero.response.rect.top()),
+            ],
+            Stroke::new(1.5_f32, ACCENT.gamma_multiply(0.65)),
+        );
         ui.add_space(6.0);
     }
 
@@ -482,6 +499,35 @@ impl App {
             });
             ui.add_space(4.0);
         }
+    }
+
+    fn telemetry_detail(&self, ui: &mut egui::Ui) {
+        let t = &self.state.telemetry;
+        card(ui, |ui| {
+            title(ui, "Hiệu năng thời gian thực");
+            ui.columns(2, |cols| {
+                cols[0].label(RichText::new("HỆ THỐNG").small().strong().color(Color32::from_rgb(56, 189, 248)));
+                cols[0].add(egui::ProgressBar::new(t.cpu as f32 / 100.0).text(format!("CPU  {}%", t.cpu)).fill(Color32::from_rgb(56, 189, 248)));
+                cols[0].add(egui::ProgressBar::new(t.memory as f32 / 100.0).text(format!("RAM  {:.1} / {:.1} GB", t.memory_used_gb, t.memory_total_gb)).fill(GOOD));
+                cols[1].label(RichText::new("GPU NVIDIA").small().strong().color(Color32::from_rgb(167, 139, 250)));
+                cols[1].add(egui::ProgressBar::new(t.gpu as f32 / 100.0).text(format!("GPU  {}%", t.gpu)).fill(Color32::from_rgb(167, 139, 250)));
+                let vram = match (t.gpu_memory_used_gb, t.gpu_memory_total_gb) { (Some(u), Some(n)) => format!("VRAM  {u:.1} / {n:.1} GB"), _ => "VRAM  —".into() };
+                let ratio = match t.gpu_memory_used_gb.zip(t.gpu_memory_total_gb) { Some((u, n)) if n > 0.0 => u / n, _ => 0.0 };
+                cols[1].add(egui::ProgressBar::new(ratio).text(vram).fill(Color32::from_rgb(244, 114, 182)));
+            });
+            ui.add_space(8.0);
+            ui.separator();
+            ui.columns(4, |c| {
+                let values = [
+                    ("NHIỆT ĐỘ GPU", t.gpu_temp.map(|v| format!("{v}°C")).unwrap_or_else(|| "—".into())),
+                    ("XUNG GPU", t.gpu_clock_mhz.map(|v| format!("{v} MHz")).unwrap_or_else(|| "—".into())),
+                    ("CÔNG SUẤT", t.gpu_power_w.map(|v| format!("{v:.0} W")).unwrap_or_else(|| "—".into())),
+                    ("QUẠT GPU", t.gpu_fan.map(|v| format!("{v}%")).unwrap_or_else(|| "0% / passive".into())),
+                ];
+                for (col, (label, value)) in c.iter_mut().zip(values) { col.label(RichText::new(label).small().color(DIM)); col.label(RichText::new(value).size(18.0).strong()); }
+            });
+            ui.label(RichText::new("Cảm biến lấy mẫu mỗi 2 giây; hiệu ứng chỉ chạy khi mở Trang chủ.").small().color(DIM));
+        });
     }
 
     fn lighting_page(&mut self, ui: &mut egui::Ui) {
@@ -895,6 +941,7 @@ impl eframe::App for App {
                         .clicked()
                     {
                         self.page = page;
+                        self.scroll_top = true;
                     }
                 }
                 ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
@@ -920,7 +967,9 @@ impl eframe::App for App {
             .frame(egui::Frame::none().fill(BG).inner_margin(Margin::same(16.0)))
             .show(ctx, |ui| {
                 if self.page == Page::Panorama {self.panorama_header(ui);} else {self.header(ui); }
-                egui::ScrollArea::vertical().id_salt((self.page,self.display_tab)).show(ui, |ui| {
+                let mut scroll=egui::ScrollArea::vertical().id_salt((self.page,self.display_tab));
+                if self.scroll_top { scroll=scroll.vertical_scroll_offset(0.0); self.scroll_top=false; }
+                scroll.show(ui, |ui| {
                     if matches!(self.page, Page::Home | Page::Panorama) {
                         self.status_card(ui);
                     }
@@ -929,6 +978,7 @@ impl eframe::App for App {
                         Page::Home => {
                             self.home_hero(ui);
                             self.home_dashboard(ui);
+                            self.telemetry_detail(ui);
                             self.device_card(ui);
                         }
                         Page::Panorama => {
@@ -943,6 +993,6 @@ impl eframe::App for App {
                 });
             });
 
-        ctx.request_repaint_after(Duration::from_millis(1000));
+        ctx.request_repaint_after(if self.page==Page::Home {Duration::from_millis(100)} else {Duration::from_millis(1000)});
     }
 }
