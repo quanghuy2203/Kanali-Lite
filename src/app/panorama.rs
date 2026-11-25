@@ -27,8 +27,10 @@ impl App {
                 std::fs::read(&path)
                     .ok()
                     .map(|f| {
-                        let modern = 480 * 232 * 3;
-                        if f.len() >= modern && f.len() % modern == 0 { (f, [480, 232]) }
+                        // v0.2.23+ writes an FPS sidecar with the 480×232 format.
+                        // Size inference is ambiguous because some legacy frame
+                        // counts are also divisible by the new frame size.
+                        if path.with_extension("fps").is_file() { (f, [480, 232]) }
                         else { (f, [240, 116]) }
                     })
                     .or_else(|| {
