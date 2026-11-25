@@ -106,20 +106,21 @@ fn run(cmd: &mut Command) -> Result<(), String> {
 }
 
 pub fn make_poster(source: &Path, name: &str) -> Result<(), String> {
-    make_poster_at(source, name, 0.0)
+    make_poster_at(source, name, 0.0, false)
 }
 
-fn make_poster_at(source: &Path, name: &str, start: f64) -> Result<(), String> {
+fn make_poster_at(source: &Path, name: &str, start: f64, preserve_cycle: bool) -> Result<(), String> {
     let dir = dir("previews")?;
     let tmp = tempfile::NamedTempFile::new_in(dir)
         .map_err(|e| e.to_string())?
         .into_temp_path();
-    let duration = media_duration(source).unwrap_or(2.0).clamp(0.5, 15.0);
-    let fps = (60.0 / duration).clamp(4.0, 12.0);
+    let source_duration = media_duration(source).unwrap_or(2.0);
+    let duration = if preserve_cycle { source_duration.clamp(0.5, 15.0) } else { source_duration.clamp(0.5, 2.0) };
+    let fps = if preserve_cycle { (120.0 / duration).clamp(8.0, 30.0) } else { 60.0 };
     let filter = format!("fps={fps:.3}:round=up,scale=480:232:force_original_aspect_ratio=decrease,pad=480:232:(ow-iw)/2:(oh-ih)/2");
-    run(ffmpeg().arg("-i").arg(source).args(["-ss", &start.to_string(), "-t", &duration.to_string(), "-frames:v", "60", "-vf", &filter, "-pix_fmt", "rgb24", "-f", "rawvideo"]).arg(&*tmp))?;
+    run(ffmpeg().arg("-i").arg(source).args(["-ss", &start.to_string(), "-t", &duration.to_string(), "-frames:v", "120", "-vf", &filter, "-pix_fmt", "rgb24", "-f", "rawvideo"]).arg(&*tmp))?;
     let len = fs::metadata(&tmp).map_err(|e| e.to_string())?.len();
-    if len == 0 || len > 60 * 480 * 232 * 3 || len % (480 * 232 * 3) != 0 {
+    if len == 0 || len > 120 * 480 * 232 * 3 || len % (480 * 232 * 3) != 0 {
         return Err("Không đọc được hình xem trước".into());
     }
     let target = poster(name);
@@ -483,7 +484,8 @@ fn import_media(source: PathBuf, project: bool, wallpaper: bool) -> Result<Strin
     }
     log_stream_info(&temp, &encoder);
     let name = device_media_name(config::now_ms());
-    make_poster_at(&temp, &name, preview_start)?;
+    let preserve_cycle = input.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("gif"));
+    make_poster_at(&temp, &name, preview_start, preserve_cycle)?;
     temp.persist_noclobber(queue.join(&name))
         .map_err(|e| e.to_string())?;
     Ok(format!("Đã chuẩn bị {name} ({encoder}). Đang chờ truyền qua USB."))
@@ -639,7 +641,7 @@ mod capture_tests {
         assert!(frames.windows(2).all(|pair| pair[0] != pair[1]));
         assert_eq!(first_picture(&clip).unwrap(), Some(0.0));
         make_poster(&clip, "test.mp4").unwrap();
-        assert_eq!(fs::metadata(poster("test.mp4")).unwrap().len(), 480 * 232 * 3 * 24);
+        assert_eq!(fs::metadata(poster("test.mp4")).unwrap().len(), 480 * 232 * 3 * 120);
     }
     #[test]
     fn rejects_black_but_accepts_dark_scene_after_fade() {

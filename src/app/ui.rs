@@ -245,6 +245,12 @@ fn short(s: &str, max: usize) -> String {
     }
 }
 
+fn uptime_text(seconds: u64) -> String {
+    let days = seconds / 86_400;
+    let hours = (seconds % 86_400) / 3_600;
+    if days > 0 { format!("{days} ngày {hours} giờ") } else { format!("{hours} giờ {} phút", (seconds % 3_600) / 60) }
+}
+
 fn combo(ui: &mut egui::Ui, label: &str, cur: &mut String, files: &[String], extra: &str) -> bool {
     let mut changed = false;
     egui::ComboBox::from_label(label)
@@ -436,6 +442,19 @@ impl App {
                 self.stage(ui, rect, &playing, true);
             });
         let phase = ((ui.ctx().input(|i| i.time) * 0.16) % 1.0) as f32;
+        let time = ui.ctx().input(|i| i.time) as f32;
+        let bounds = hero.response.rect;
+        let painter = ui.painter().with_clip_rect(bounds);
+        // Lightweight ambient telemetry field: deterministic particles and a
+        // slow scan line, drawn only while Home is visible.
+        for i in 0..14 {
+            let seed = i as f32 * 0.618_034;
+            let x = bounds.left() + ((seed + time * (0.008 + i as f32 * 0.0004)).fract()) * bounds.width();
+            let y = bounds.top() + ((seed * 1.73 + time * 0.012).fract()) * bounds.height();
+            painter.circle_filled(egui::pos2(x, y), 1.3 + (i % 3) as f32 * 0.5, ACCENT.gamma_multiply(0.08));
+        }
+        let scan_y = bounds.top() + ((time * 0.055).fract()) * bounds.height();
+        painter.line_segment([egui::pos2(bounds.left(), scan_y), egui::pos2(bounds.right(), scan_y)], Stroke::new(1.0_f32, ACCENT.gamma_multiply(0.055)));
         let x = egui::lerp(hero.response.rect.left()..=hero.response.rect.right(), phase);
         ui.painter().circle_filled(
             egui::pos2(x, hero.response.rect.top() + 1.0),
@@ -524,6 +543,16 @@ impl App {
                     ("QUẠT GPU", t.gpu_fan.map(|v| format!("{v}%")).unwrap_or_else(|| "0% / passive".into())),
                 ];
                 for (col, (label, value)) in c.iter_mut().zip(values) { col.label(RichText::new(label).small().color(DIM)); col.label(RichText::new(value).size(18.0).strong()); }
+            });
+            ui.add_space(8.0);
+            ui.columns(4, |c| {
+                let values = [
+                    ("LUỒNG CPU", format!("{} threads", t.cpu_threads)),
+                    ("RAM KHẢ DỤNG", format!("{:.1} GB", t.memory_available_gb)),
+                    ("XUNG VRAM", t.gpu_memory_clock_mhz.map(|v| format!("{v} MHz")).unwrap_or_else(|| "—".into())),
+                    ("THỜI GIAN HOẠT ĐỘNG", uptime_text(t.uptime_seconds)),
+                ];
+                for (col, (label, value)) in c.iter_mut().zip(values) { col.label(RichText::new(label).small().color(DIM)); col.label(RichText::new(value).size(16.0).strong()); }
             });
             ui.label(RichText::new("Cảm biến lấy mẫu mỗi 2 giây; hiệu ứng chỉ chạy khi mở Trang chủ.").small().color(DIM));
         });

@@ -48,7 +48,7 @@ impl App {
                             })
                     })?;
             let size = dimensions[0] * dimensions[1] * 3;
-            if frames.is_empty() || frames.len() > size * 60 || frames.len() % size != 0 {
+            if frames.is_empty() || frames.len() > size * 120 || frames.len() % size != 0 {
                 return None;
             }
             let fps = std::fs::read_to_string(path.with_extension("fps"))
@@ -75,7 +75,7 @@ impl App {
             if let Ok(all) = std::fs::read(&path)
                 .or_else(|_| std::fs::read(path.with_extension("numbered.rgb")))
             {
-                if all.len() > size && all.len() <= size * 60 && all.len() % size == 0 {
+                if all.len() > size && all.len() <= size * 120 && all.len() % size == 0 {
                     clip.frames = all;
                     clip.start = Instant::now();
                 }

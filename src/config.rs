@@ -151,7 +151,11 @@ pub struct Telemetry {
     pub gpu_memory_used_gb: Option<f32>,
     pub gpu_memory_total_gb: Option<f32>,
     pub gpu_clock_mhz: Option<u32>,
+    pub gpu_memory_clock_mhz: Option<u32>,
     pub gpu_fan: Option<u32>,
+    pub memory_available_gb: f32,
+    pub cpu_threads: usize,
+    pub uptime_seconds: u64,
 }
 
 #[derive(Serialize, Deserialize, Clone, Default, Debug)]

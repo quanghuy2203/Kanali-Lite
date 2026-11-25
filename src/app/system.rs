@@ -71,6 +71,9 @@ impl Monitor {
             memory,
             memory_used_gb:(mem.ullTotalPhys.saturating_sub(mem.ullAvailPhys)) as f32/1_073_741_824.0,
             memory_total_gb:mem.ullTotalPhys as f32/1_073_741_824.0,
+            memory_available_gb:mem.ullAvailPhys as f32/1_073_741_824.0,
+            cpu_threads:std::thread::available_parallelism().map(|n|n.get()).unwrap_or(0),
+            uptime_seconds:unsafe { windows::Win32::System::SystemInformation::GetTickCount64() } / 1000,
             ..Default::default()
         };
         if let Some(nv) = &self.nvml {
@@ -84,6 +87,7 @@ impl Monitor {
                 out.gpu_power_w = g.power_usage().ok().map(|v| v as f32 / 1000.0);
                 if let Ok(m)=g.memory_info(){out.gpu_memory_used_gb=Some(m.used as f32/1_073_741_824.0);out.gpu_memory_total_gb=Some(m.total as f32/1_073_741_824.0);}
                 out.gpu_clock_mhz=g.clock_info(Clock::Graphics).ok();
+                out.gpu_memory_clock_mhz=g.clock_info(Clock::Memory).ok();
                 out.gpu_fan=g.fan_speed(0).ok();
             }
         }
