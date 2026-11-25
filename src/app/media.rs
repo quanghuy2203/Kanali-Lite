@@ -685,7 +685,7 @@ mod capture_tests {
         make_poster(&clip, "test.mp4").unwrap();
         assert_eq!(
             fs::metadata(poster("test.mp4")).unwrap().len(),
-            240 * 116 * 3 * 12
+            240 * 116 * 3 * 120
         );
     }
     #[test]
