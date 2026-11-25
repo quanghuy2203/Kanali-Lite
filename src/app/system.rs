@@ -192,26 +192,68 @@ impl Empty for String {
 }
 
 pub fn take_over_and_off() -> Result<String, String> {
-    if service_running("LConnectServiceWatcher") { sc("stop", "LConnectServiceWatcher")?; }
-    if service_running("LConnectService") { sc("stop", "LConnectService")?; }
-    // L-Connect leaves its bundled OpenRGB worker alive after its service stops.
-    let _=Command::new("taskkill.exe").args(["/IM","OpenRGB.exe","/F"]).creation_flags(HIDDEN).output();
+    let watcher_was_running = service_running("LConnectServiceWatcher");
+    let service_was_running = service_running("LConnectService");
+    if watcher_was_running { sc("stop", "LConnectServiceWatcher")?; }
+    if service_was_running { sc("stop", "LConnectService")?; }
+    let _ = Command::new("taskkill.exe").args(["/IM", "OpenRGB.exe", "/F"])
+        .creation_flags(HIDDEN).output();
     std::thread::sleep(std::time::Duration::from_millis(700));
-    // "off" is not a portable OpenRGB mode. Black + zero brightness works for
-    // both Direct and Static controllers and applies to every detected device.
+
+    // Never issue a global OpenRGB command: L-Connect exposes fan controllers
+    // too. Select only the Zotac controller, then immediately return fan control.
     let mut child = Command::new(OPENRGB)
-        .args(["--noautoconnect", "--color", "000000", "--brightness", "0"])
+        .args(["--noautoconnect", "--device", "ZOTAC", "--color", "000000", "--brightness", "0"])
         .creation_flags(HIDDEN)
         .spawn()
         .map_err(|e| format!("Không mở được OpenRGB: {e}"))?;
+    let mut gpu_ok = false;
     for _ in 0..40 {
         if let Some(status)=child.try_wait().map_err(|e|e.to_string())? {
-            return if status.success(){Ok("Đã giành quyền và đặt toàn bộ LED về 0% / màu đen".into())}else{Err("OpenRGB không tìm thấy bộ điều khiển tương thích".into())};
+            gpu_ok = status.success();
+            break;
         }
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
-    let _=child.kill();
-    Ok("Đã gửi lệnh tắt LED; OpenRGB được đóng sau khi áp dụng".into())
+    let _ = child.kill();
+    if service_was_running { let _ = sc("start", "LConnectService"); }
+    if watcher_was_running { let _ = sc("start", "LConnectServiceWatcher"); }
+
+    let ram = lexar_ram_off();
+    match (gpu_ok, ram) {
+        (true, Ok(())) => Ok("Đã tắt LED Zotac GPU và gửi lệnh tắt RAM Lexar; L-Connect đã được mở lại cho quạt".into()),
+        (true, Err(e)) => Err(format!("GPU đã tắt, RAM Lexar chưa tắt: {e}")),
+        (false, Ok(())) => Err("RAM đã nhận lệnh, nhưng OpenRGB không tìm thấy Zotac GPU".into()),
+        (false, Err(e)) => Err(format!("Không tắt được GPU hoặc RAM: {e}")),
+    }
+}
+
+fn lexar_ram_off() -> Result<(), String> {
+    let config = std::path::PathBuf::from(std::env::var_os("APPDATA").ok_or("Không tìm thấy APPDATA")?)
+        .join("Lexar RGB Sync").join("config");
+    let exe = std::path::Path::new(r"C:\Program Files (x86)\Lexar RGB Sync\Gaming.exe");
+    if !config.is_file() || !exe.is_file() { return Err("Chưa cài Lexar RGB Sync".into()); }
+
+    for name in ["Gaming.exe", "hid.exe"] {
+        let _ = Command::new("taskkill.exe").args(["/IM", name, "/F"])
+            .creation_flags(HIDDEN).output();
+    }
+    let mut text = std::fs::read_to_string(&config).map_err(|e| e.to_string())?;
+    for key in ["led_sw", "audio_sw", "sync_sw"] {
+        let prefix = format!("{key}=");
+        if let Some(line) = text.lines().find(|line| line.starts_with(&prefix)) {
+            text = text.replacen(line, &format!("{prefix}0"), 1);
+        }
+    }
+    let backup = config.with_extension("kanali-backup");
+    if !backup.exists() { std::fs::copy(&config, &backup).map_err(|e| e.to_string())?; }
+    std::fs::write(&config, text).map_err(|e| e.to_string())?;
+
+    // Lexar's HID worker performs the actual SMBus write. Keep it alive; killing
+    // it after launch (the previous implementation) prevented the RAM update.
+    Command::new(exe).creation_flags(HIDDEN).spawn().map_err(|e| e.to_string())?;
+    std::thread::sleep(std::time::Duration::from_secs(5));
+    Ok(())
 }
 
 pub fn release() -> Result<String, String> {

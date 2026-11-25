@@ -1,8 +1,6 @@
 use super::*;
 use egui::{Align2, FontId, Rect, Sense};
 
-const PREVIEW_FRAME_MS: u128 = 167;
-
 fn segment(ui: &mut egui::Ui, selected: bool, text: &str) -> egui::Response {
     ui.add(
         egui::Button::new(RichText::new(text).strong().color(if selected { Color32::BLACK } else { DIM }))
@@ -65,18 +63,26 @@ impl App {
         let size = clip.dimensions[0] * clip.dimensions[1] * 3;
         let count = clip.frames.len() / size;
         if animate && count > 1 {
-            let i = (clip.start.elapsed().as_millis() / PREVIEW_FRAME_MS) as usize % count;
-            if i != clip.current {
+            // Cross-fade the compact source frames at display refresh speed. This
+            // keeps old 6 FPS posters visually fluid without decoding video in UI.
+            let elapsed = clip.start.elapsed().as_secs_f32();
+            let position = (elapsed * 6.0) % count as f32;
+            let i = position.floor() as usize;
+            let next = (i + 1) % count;
+            let mix = position.fract();
+            if i != clip.current || mix > 0.02 {
+                let a = &clip.frames[i * size..(i + 1) * size];
+                let b = &clip.frames[next * size..(next + 1) * size];
+                let blended: Vec<u8> = a.iter().zip(b).map(|(&x, &y)| {
+                    (x as f32 + (y as f32 - x as f32) * mix) as u8
+                }).collect();
                 clip.texture.set(
-                    egui::ColorImage::from_rgb(
-                        clip.dimensions,
-                        &clip.frames[i * size..(i + 1) * size],
-                    ),
+                    egui::ColorImage::from_rgb(clip.dimensions, &blended),
                     Default::default(),
                 );
                 clip.current = i;
             }
-            ui.ctx().request_repaint_after(Duration::from_millis(PREVIEW_FRAME_MS as u64));
+            ui.ctx().request_repaint_after(Duration::from_millis(16));
         }
         let aspect = clip.dimensions[0] as f32 / clip.dimensions[1] as f32;
         let width = rect.width().min(rect.height() * aspect);
@@ -90,7 +96,7 @@ impl App {
         true
     }
 
-    fn stage(&mut self, ui: &mut egui::Ui, rect: Rect, name: &str, focus: bool) {
+    pub(super) fn stage(&mut self, ui: &mut egui::Ui, rect: Rect, name: &str, focus: bool) {
         let response = ui.interact(rect, ui.id().with(("preview-stage", name)), Sense::hover());
         let glow = ui.ctx().animate_bool(response.id, focus || response.hovered());
         let p = ui.painter();
@@ -122,7 +128,7 @@ impl App {
             ui.painter().text(
                 band.right_center() - vec2(12., 0.),
                 Align2::RIGHT_CENTER,
-                if focus { "LIVE PREVIEW" } else { "2240 × 1080" },
+                if focus { "ĐANG PHÁT" } else { "2240 × 1080" },
                 FontId::proportional(11.0),
                 if focus { ACCENT } else { DIM },
             );
@@ -286,6 +292,11 @@ impl App {
                     ui.label(RichText::new("BỐ CỤC").small().strong().color(DIM));
                     if segment(ui, !self.draft.split, "Toàn màn hình").clicked() { self.draft.split = false; }
                     if segment(ui, self.draft.split, "Chia đôi").clicked() { self.draft.split = true; }
+                    if self.draft.split {
+                        ui.separator();
+                        if segment(ui, !self.right_slot, "Ô trái").clicked() { self.right_slot = false; }
+                        if segment(ui, self.right_slot, "Ô phải").clicked() { self.right_slot = true; }
+                    }
                     ui.separator();
                     ui.label(RichText::new("CHẾ ĐỘ PHÁT").small().strong().color(DIM));
                     for (i, label) in ["Một lần", "Lặp", "Ngẫu nhiên"].iter().enumerate() {
@@ -296,54 +307,14 @@ impl App {
                 });
             });
             ui.add_space(8.0);
-            let w = ui.available_width();
-            let h = (w * 0.26).clamp(145., 245.);
-            let (area, _) = ui.allocate_exact_size(vec2(w, h), Sense::hover());
-            let names = if self.draft.split {
-                vec![self.draft.left.clone(), self.draft.right.clone()]
-            } else {
-                vec![self.full.clone()]
-            };
-            for (i, name) in names.iter().enumerate() {
-                let width = w / names.len() as f32;
-                let r = Rect::from_min_size(area.min + vec2(i as f32 * width, 0.), vec2(width, h))
-                    .shrink(3.);
-                self.stage(
-                    ui,
-                    r,
-                    name,
-                    !self.draft.split || (i == 1) == self.right_slot,
-                );
-                if ui
-                    .interact(r, ui.id().with(("slot", i)), Sense::click())
-                    .clicked()
-                {
-                    self.right_slot = i == 1;
-                }
-            }
-
-            let target = if self.draft.split && self.right_slot {
-                1
-            } else {
-                0
-            };
-            if let Some(name) = names.get(target).filter(|n| !n.is_empty()) {
-                if self.clips.get(name).is_some_and(|p| p.is_none())
-                    && ui
-                        .add_enabled(
-                            self.media_job.is_none(),
-                            egui::Button::new("Ghép video để tạo preview"),
-                        )
-                        .clicked()
-                {
-                    self.pick_media(Some(name.clone()));
-                }
-            }
-            ui.label(if self.draft.split {
-                "Chọn ô trái hoặc phải, rồi chọn video trong thư viện."
-            } else {
-                "Chọn video toàn màn hình trong thư viện."
-            });
+            egui::Frame::none().fill(Color32::from_rgb(20, 26, 34)).rounding(10.0)
+                .inner_margin(Margin::symmetric(14.0, 10.0)).show(ui, |ui| {
+                    ui.label(if self.draft.split {
+                        "Chọn ô trái hoặc phải rồi chọn media bên dưới. Preview đang phát chỉ hiển thị ở Trang chủ."
+                    } else {
+                        "Chọn media bên dưới. Preview đang phát chỉ hiển thị ở Trang chủ."
+                    });
+                });
         } else {
             let mut presets: Vec<_> = self
                 .state

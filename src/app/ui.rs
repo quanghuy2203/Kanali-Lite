@@ -375,6 +375,7 @@ impl App {
     }
 
     fn home_hero(&mut self, ui: &mut egui::Ui) {
+        let playing = self.cfg.playing.clone();
         let hero = egui::Frame::none()
             .fill(CARD)
             .stroke(Stroke::new(1.0_f32, BORDER))
@@ -396,7 +397,7 @@ impl App {
                         );
                         ui.label(
                             RichText::new(
-                                "Chọn preset, nhập wallpaper và điều khiển màn hình từ một nơi.",
+                                "Nội dung đang chạy trên PANORAMA, cập nhật mượt mà ngay tại đây.",
                             )
                             .color(DIM),
                         );
@@ -406,30 +407,12 @@ impl App {
                             self.scroll_top = true;
                         }
                     });
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let (rect, _) =
-                            ui.allocate_exact_size(vec2(148.0, 88.0), egui::Sense::hover());
-                        ui.painter()
-                            .rect_filled(rect, 13.0, Color32::from_rgb(11, 14, 19));
-                        ui.painter().rect_stroke(
-                            rect,
-                            13.0,
-                            Stroke::new(2.0_f32, ACCENT.gamma_multiply(0.75)),
-                        );
-                        ui.painter().text(
-                            rect.center(),
-                            egui::Align2::CENTER_CENTER,
-                            "2240 × 1080",
-                            egui::FontId::proportional(15.0),
-                            ACCENT,
-                        );
-                    });
                 });
-                if self.alive() && self.state.connected {
-                    ui.add_space(14.0);
-                    ui.separator();
-                    info_row(ui, "Đang phát", &label_of(&self.cfg.playing));
-                }
+                ui.add_space(16.0);
+                let width = ui.available_width();
+                let height = (width * 1080.0 / 2240.0).clamp(180.0, 330.0);
+                let (rect, _) = ui.allocate_exact_size(vec2(width, height), egui::Sense::hover());
+                self.stage(ui, rect, &playing, true);
             });
         let phase = ((ui.ctx().input(|i| i.time) * 0.16) % 1.0) as f32;
         let x = egui::lerp(hero.response.rect.left()..=hero.response.rect.right(), phase);
@@ -461,33 +444,31 @@ impl App {
             .map(|i| i.resolution.as_str())
             .filter(|s| !s.is_empty())
             .unwrap_or("—");
-        let t = &self.state.telemetry;
+        let personal = self.state.files.iter().filter(|p| p.contains("/media/") || p.contains("/user/")).count();
         let metrics = [
-            (
-                "CPU",
-                format!("{}%", t.cpu),
-                "Tải bộ xử lý".to_owned(),
-                Color32::from_rgb(56, 189, 248),
-            ),
-            (
-                "GPU",
-                format!("{}%", t.gpu),
-                t.gpu_temp
-                    .map(|n| format!("{n}°C · {:.0} W", t.gpu_power_w.unwrap_or(0.)))
-                    .unwrap_or_else(|| "Đang đọc cảm biến".into()),
-                Color32::from_rgb(167, 139, 250),
-            ),
-            (
-                "BỘ NHỚ",
-                format!("{}%", t.memory),
-                "RAM đang sử dụng".to_owned(),
-                GOOD,
-            ),
             (
                 "PANORAMA",
                 status.0.to_owned(),
-                format!("{resolution} · {}% sáng", self.cfg.level),
+                status.1.to_owned(),
                 status.2,
+            ),
+            (
+                "ĐỘ PHÂN GIẢI",
+                resolution.to_owned(),
+                "PANORAMA canvas".to_owned(),
+                ACCENT,
+            ),
+            (
+                "THƯ VIỆN",
+                personal.to_string(),
+                "Media cá nhân".to_owned(),
+                Color32::from_rgb(96, 165, 250),
+            ),
+            (
+                "ĐỘ SÁNG",
+                format!("{}%", self.cfg.level),
+                "Mức trên màn hình".to_owned(),
+                WARN,
             ),
         ];
         let columns = if ui.available_width() >= 760.0 { 4 } else { 2 };
@@ -606,11 +587,11 @@ impl App {
                     if primary_button(ui, "Trả quyền cho L-Connect").clicked() {
                         config::send_command("lighting-release");
                     }
-                } else if primary_button(ui, "Giành quyền & tắt đèn").clicked() {
+                } else if primary_button(ui, "Tắt LED GPU + RAM").clicked() {
                     self.confirm_takeover = true;
                 }
             });
-            ui.label(RichText::new("Chỉ dừng dịch vụ L-Connect sau khi bạn xác nhận. Có thể cần mở Kanali bằng quyền quản trị.").small().color(DIM));
+            ui.label(RichText::new("Chỉ nhắm tới Zotac GPU và RAM Lexar; L-Connect được mở lại ngay để tiếp tục điều khiển quạt.").small().color(DIM));
         });
         if self.confirm_takeover {
             egui::Window::new("Xác nhận chuyển quyền")
@@ -618,8 +599,8 @@ impl App {
                 .resizable(false)
                 .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
                 .show(ui.ctx(), |ui| {
-                    ui.label("Kanali sẽ dừng dịch vụ L-Connect và gửi lệnh tắt đèn tới RAM/GPU.");
-                    ui.label(RichText::new("Quạt và màn hình PANORAMA không bị tắt.").color(DIM));
+                    ui.label("Kanali chỉ gửi lệnh tắt LED tới Zotac GPU và RAM Lexar.");
+                    ui.label(RichText::new("L-Connect sẽ được khởi động lại ngay để giữ điều khiển quạt.").color(DIM));
                     ui.horizontal(|ui| {
                         if ui.button("Hủy").clicked() {
                             self.confirm_takeover = false;
