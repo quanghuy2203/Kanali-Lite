@@ -239,21 +239,48 @@ fn lexar_ram_off() -> Result<(), String> {
             .creation_flags(HIDDEN).output();
     }
     let mut text = std::fs::read_to_string(&config).map_err(|e| e.to_string())?;
-    for key in ["led_sw", "audio_sw", "sync_sw"] {
+    for (key, value) in [("led_sw", "1"), ("audio_sw", "0"), ("sync_sw", "0")] {
         let prefix = format!("{key}=");
         if let Some(line) = text.lines().find(|line| line.starts_with(&prefix)) {
-            text = text.replacen(line, &format!("{prefix}0"), 1);
+            text = text.replacen(line, &format!("{prefix}{value}"), 1);
         }
     }
     let backup = config.with_extension("kanali-backup");
     if !backup.exists() { std::fs::copy(&config, &backup).map_err(|e| e.to_string())?; }
     std::fs::write(&config, text).map_err(|e| e.to_string())?;
 
-    // Lexar's HID worker performs the actual SMBus write. Keep it alive; killing
-    // it after launch (the previous implementation) prevented the RAM update.
     Command::new(exe).creation_flags(HIDDEN).spawn().map_err(|e| e.to_string())?;
-    std::thread::sleep(std::time::Duration::from_secs(5));
-    Ok(())
+
+    // Lexar's own guide requires LED OFF to be committed with Apply. The UI is
+    // custom-drawn, so click its documented skin coordinates through window
+    // messages while both processes run at the same elevated integrity level.
+    use windows::{core::HSTRING, Win32::{Foundation::{LPARAM, WPARAM}, UI::WindowsAndMessaging::{FindWindowW, GetClientRect, PostMessageW, WM_CLOSE, WM_LBUTTONDOWN, WM_LBUTTONUP}}};
+    let title = HSTRING::from("Lexar RGB Sync_Config");
+    let started = std::time::Instant::now();
+    let window = loop {
+        if let Ok(hwnd) = unsafe { FindWindowW(None, &title) } { break hwnd; }
+        if started.elapsed() > std::time::Duration::from_secs(12) {
+            return Err("Lexar RGB Sync không mở được cửa sổ điều khiển".into());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(150));
+    };
+    let mut rect = windows::Win32::Foundation::RECT::default();
+    unsafe { GetClientRect(window, &mut rect) }.map_err(|e| e.to_string())?;
+    let click = |x: i32, y: i32| -> Result<(), String> {
+        let sx = x * (rect.right - rect.left).max(1) / 1100;
+        let sy = y * (rect.bottom - rect.top).max(1) / 480;
+        let point = LPARAM(((sy as isize) << 16) | (sx as isize & 0xffff));
+        unsafe { PostMessageW(window, WM_LBUTTONDOWN, WPARAM(1), point) }.map_err(|e| e.to_string())?;
+        unsafe { PostMessageW(window, WM_LBUTTONUP, WPARAM(0), point) }.map_err(|e| e.to_string())?;
+        Ok(())
+    };
+    click(916, 58)?; // LED OFF
+    std::thread::sleep(std::time::Duration::from_millis(350));
+    click(1051, 450)?; // Apply
+    std::thread::sleep(std::time::Duration::from_secs(2));
+    let applied = std::fs::read_to_string(&config).unwrap_or_default().lines().any(|l| l == "led_sw=0");
+    let _ = unsafe { PostMessageW(window, WM_CLOSE, WPARAM(0), LPARAM(0)) };
+    if applied { Ok(()) } else { Err("Lexar RGB Sync không xác nhận trạng thái LED OFF".into()) }
 }
 
 pub fn release() -> Result<String, String> {

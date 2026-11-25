@@ -114,15 +114,30 @@ fn make_poster_at(source: &Path, name: &str, start: f64) -> Result<(), String> {
     let tmp = tempfile::NamedTempFile::new_in(dir)
         .map_err(|e| e.to_string())?
         .into_temp_path();
-    // 6 fps is visibly smoother than the old 2 fps preview while keeping each
-    // 240x116 preview near 1 MiB (12 RGB frames) and cheap to upload to the GPU.
-    run(ffmpeg().arg("-i").arg(source).args(["-ss", &start.to_string(), "-t","2","-frames:v","12","-vf","fps=6:round=up,scale=240:116:force_original_aspect_ratio=decrease,pad=240:116:(ow-iw)/2:(oh-ih)/2","-pix_fmt","rgb24","-f","rawvideo"]).arg(&*tmp))?;
+    let duration = media_duration(source).unwrap_or(2.0).clamp(0.5, 15.0);
+    let fps = (60.0 / duration).clamp(4.0, 12.0);
+    let filter = format!("fps={fps:.3}:round=up,scale=480:232:force_original_aspect_ratio=decrease,pad=480:232:(ow-iw)/2:(oh-ih)/2");
+    run(ffmpeg().arg("-i").arg(source).args(["-ss", &start.to_string(), "-t", &duration.to_string(), "-frames:v", "60", "-vf", &filter, "-pix_fmt", "rgb24", "-f", "rawvideo"]).arg(&*tmp))?;
     let len = fs::metadata(&tmp).map_err(|e| e.to_string())?.len();
-    if len == 0 || len > 12 * 240 * 116 * 3 || len % (240 * 116 * 3) != 0 {
+    if len == 0 || len > 60 * 480 * 232 * 3 || len % (480 * 232 * 3) != 0 {
         return Err("Không đọc được hình xem trước".into());
     }
-    tmp.persist(poster(name)).map_err(|e| e.to_string())?;
+    let target = poster(name);
+    tmp.persist(&target).map_err(|e| e.to_string())?;
+    fs::write(target.with_extension("fps"), format!("{fps:.3}"))
+        .map_err(|e| e.to_string())?;
     Ok(())
+}
+
+fn media_duration(source: &Path) -> Option<f64> {
+    let output = ffmpeg().arg("-i").arg(source).output().ok()?;
+    let text = String::from_utf8_lossy(&output.stderr);
+    let value = text.split("Duration: ").nth(1)?.split(',').next()?;
+    let mut parts = value.trim().split(':');
+    let hours: f64 = parts.next()?.parse().ok()?;
+    let minutes: f64 = parts.next()?.parse().ok()?;
+    let seconds: f64 = parts.next()?.parse().ok()?;
+    Some(hours * 3600.0 + minutes * 60.0 + seconds)
 }
 
 struct Wallpaper {
@@ -624,7 +639,7 @@ mod capture_tests {
         assert!(frames.windows(2).all(|pair| pair[0] != pair[1]));
         assert_eq!(first_picture(&clip).unwrap(), Some(0.0));
         make_poster(&clip, "test.mp4").unwrap();
-        assert_eq!(fs::metadata(poster("test.mp4")).unwrap().len(), 240 * 116 * 3 * 12);
+        assert_eq!(fs::metadata(poster("test.mp4")).unwrap().len(), 480 * 232 * 3 * 24);
     }
     #[test]
     fn rejects_black_but_accepts_dark_scene_after_fade() {

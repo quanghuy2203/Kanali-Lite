@@ -26,7 +26,11 @@ impl App {
             let (frames, dimensions) =
                 std::fs::read(&path)
                     .ok()
-                    .map(|f| (f, [240, 116]))
+                    .map(|f| {
+                        let modern = 480 * 232 * 3;
+                        if f.len() >= modern && f.len() % modern == 0 { (f, [480, 232]) }
+                        else { (f, [240, 116]) }
+                    })
                     .or_else(|| {
                         std::fs::read(path.with_extension("numbered.rgb"))
                             .ok()
@@ -42,10 +46,12 @@ impl App {
                             })
                     })?;
             let size = dimensions[0] * dimensions[1] * 3;
-            // Bound decoded preview memory to 12 small RGB frames (~1 MiB/file).
-            if frames.is_empty() || frames.len() > size * 12 || frames.len() % size != 0 {
+            if frames.is_empty() || frames.len() > size * 60 || frames.len() % size != 0 {
                 return None;
             }
+            let fps = std::fs::read_to_string(path.with_extension("fps"))
+                .ok().and_then(|value| value.parse().ok()).unwrap_or(6.0);
+            let frames = if animate { frames } else { frames[..size].to_vec() };
             let texture = ui.ctx().load_texture(
                 name,
                 egui::ColorImage::from_rgb(dimensions, &frames[..size]),
@@ -57,16 +63,28 @@ impl App {
                 texture,
                 start: Instant::now(),
                 current: 0,
+                fps,
             })
         });
         let Some(clip) = clip else { return false };
         let size = clip.dimensions[0] * clip.dimensions[1] * 3;
+        if animate && clip.frames.len() == size {
+            let path = crate::media::poster(name);
+            if let Ok(all) = std::fs::read(&path)
+                .or_else(|_| std::fs::read(path.with_extension("numbered.rgb")))
+            {
+                if all.len() > size && all.len() <= size * 60 && all.len() % size == 0 {
+                    clip.frames = all;
+                    clip.start = Instant::now();
+                }
+            }
+        }
         let count = clip.frames.len() / size;
         if animate && count > 1 {
             // Cross-fade the compact source frames at display refresh speed. This
             // keeps old 6 FPS posters visually fluid without decoding video in UI.
             let elapsed = clip.start.elapsed().as_secs_f32();
-            let position = (elapsed * 6.0) % count as f32;
+            let position = (elapsed * clip.fps) % count as f32;
             let i = position.floor() as usize;
             let next = (i + 1) % count;
             let mix = position.fract();

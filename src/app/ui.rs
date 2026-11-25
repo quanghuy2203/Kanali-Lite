@@ -198,6 +198,26 @@ fn metric_card(ui: &mut egui::Ui, label: &str, value: &str, detail: &str, color:
         });
 }
 
+fn ring_gauge(ui: &mut egui::Ui, label: &str, value: f32, color: Color32, detail: &str) {
+    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 132.0), egui::Sense::hover());
+    let center = egui::pos2(rect.center().x, rect.top() + 58.0);
+    let radius = 39.0;
+    let start = std::f32::consts::PI * 0.75;
+    let sweep = std::f32::consts::PI * 1.5;
+    let arc = |fraction: f32| -> Vec<egui::Pos2> {
+        let steps = (42.0 * fraction.max(0.05)).ceil() as usize;
+        (0..=steps).map(|i| {
+            let angle = start + sweep * fraction * i as f32 / steps as f32;
+            center + vec2(angle.cos(), angle.sin()) * radius
+        }).collect()
+    };
+    ui.painter().add(egui::Shape::line(arc(1.0), Stroke::new(7.0_f32, Color32::from_rgb(39, 47, 59))));
+    ui.painter().add(egui::Shape::line(arc(value.clamp(0.0, 1.0)), Stroke::new(7.0_f32, color)));
+    ui.painter().text(center, egui::Align2::CENTER_CENTER, format!("{:.0}%", value * 100.0), egui::FontId::proportional(22.0), Color32::WHITE);
+    ui.painter().text(egui::pos2(center.x, rect.top() + 8.0), egui::Align2::CENTER_TOP, label, egui::FontId::proportional(12.0), color);
+    ui.painter().text(egui::pos2(center.x, rect.bottom() - 5.0), egui::Align2::CENTER_BOTTOM, detail, egui::FontId::proportional(11.0), DIM);
+}
+
 fn file_of(path: &str) -> &str {
     path.rsplit('/').next().unwrap_or(path)
 }
@@ -272,6 +292,7 @@ struct Clip {
     texture: egui::TextureHandle,
     start: Instant,
     current: usize,
+    fps: f32,
 }
 
 struct App {
@@ -486,15 +507,12 @@ impl App {
         let t = &self.state.telemetry;
         card(ui, |ui| {
             title(ui, "Hiệu năng thời gian thực");
-            ui.columns(2, |cols| {
-                cols[0].label(RichText::new("HỆ THỐNG").small().strong().color(Color32::from_rgb(56, 189, 248)));
-                cols[0].add(egui::ProgressBar::new(t.cpu as f32 / 100.0).text(format!("CPU  {}%", t.cpu)).fill(Color32::from_rgb(56, 189, 248)));
-                cols[0].add(egui::ProgressBar::new(t.memory as f32 / 100.0).text(format!("RAM  {:.1} / {:.1} GB", t.memory_used_gb, t.memory_total_gb)).fill(GOOD));
-                cols[1].label(RichText::new("GPU NVIDIA").small().strong().color(Color32::from_rgb(167, 139, 250)));
-                cols[1].add(egui::ProgressBar::new(t.gpu as f32 / 100.0).text(format!("GPU  {}%", t.gpu)).fill(Color32::from_rgb(167, 139, 250)));
-                let vram = match (t.gpu_memory_used_gb, t.gpu_memory_total_gb) { (Some(u), Some(n)) => format!("VRAM  {u:.1} / {n:.1} GB"), _ => "VRAM  —".into() };
-                let ratio = match t.gpu_memory_used_gb.zip(t.gpu_memory_total_gb) { Some((u, n)) if n > 0.0 => u / n, _ => 0.0 };
-                cols[1].add(egui::ProgressBar::new(ratio).text(vram).fill(Color32::from_rgb(244, 114, 182)));
+            let vram_ratio = match t.gpu_memory_used_gb.zip(t.gpu_memory_total_gb) { Some((u, n)) if n > 0.0 => u / n, _ => 0.0 };
+            ui.columns(4, |cols| {
+                ring_gauge(&mut cols[0], "CPU", t.cpu as f32 / 100.0, Color32::from_rgb(56, 189, 248), "Tải bộ xử lý");
+                ring_gauge(&mut cols[1], "GPU", t.gpu as f32 / 100.0, Color32::from_rgb(167, 139, 250), &t.gpu_temp.map(|v| format!("{v}°C")).unwrap_or_else(|| "Đang đọc cảm biến".into()));
+                ring_gauge(&mut cols[2], "RAM", t.memory as f32 / 100.0, GOOD, &format!("{:.1} / {:.1} GB", t.memory_used_gb, t.memory_total_gb));
+                ring_gauge(&mut cols[3], "VRAM", vram_ratio, Color32::from_rgb(244, 114, 182), &match (t.gpu_memory_used_gb, t.gpu_memory_total_gb) { (Some(u), Some(n)) => format!("{u:.1} / {n:.1} GB"), _ => "Chưa có dữ liệu".into() });
             });
             ui.add_space(8.0);
             ui.separator();
