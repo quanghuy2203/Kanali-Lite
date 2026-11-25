@@ -1,20 +1,14 @@
 use super::*;
 use egui::{Align2, FontId, Rect, Sense};
 
+const PREVIEW_FRAME_MS: u128 = 167;
+
 fn segment(ui: &mut egui::Ui, selected: bool, text: &str) -> egui::Response {
     ui.add(
-        egui::Button::new(RichText::new(text).strong().color(if selected {
-            Color32::BLACK
-        } else {
-            DIM
-        }))
-        .fill(if selected {
-            ACCENT
-        } else {
-            Color32::from_rgb(30, 36, 45)
-        })
-        .stroke(Stroke::new(1.0_f32, if selected { ACCENT } else { BORDER }))
-        .rounding(9.0),
+        egui::Button::new(RichText::new(text).strong().color(if selected { Color32::BLACK } else { DIM }))
+            .fill(if selected { ACCENT } else { Color32::from_rgb(30, 36, 45) })
+            .stroke(Stroke::new(1.0_f32, if selected { ACCENT } else { BORDER }))
+            .rounding(9.0),
     )
 }
 
@@ -25,7 +19,7 @@ fn title_for(name: &str) -> String {
 }
 
 impl App {
-    pub(super) fn artwork(&mut self, ui: &egui::Ui, name: &str, rect: Rect, animate: bool) -> bool {
+    fn artwork(&mut self, ui: &egui::Ui, name: &str, rect: Rect, animate: bool) -> bool {
         if name.is_empty() {
             return false;
         }
@@ -50,15 +44,10 @@ impl App {
                             })
                     })?;
             let size = dimensions[0] * dimensions[1] * 3;
-            // Animated focus previews keep up to 120 frames; gallery cards keep one.
-            if frames.is_empty() || frames.len() > size * 120 || frames.len() % size != 0 {
+            // Bound decoded preview memory to 12 small RGB frames (~1 MiB/file).
+            if frames.is_empty() || frames.len() > size * 12 || frames.len() % size != 0 {
                 return None;
             }
-            let frames = if animate {
-                frames
-            } else {
-                frames[..size].to_vec()
-            };
             let texture = ui.ctx().load_texture(
                 name,
                 egui::ColorImage::from_rgb(dimensions, &frames[..size]),
@@ -74,28 +63,9 @@ impl App {
         });
         let Some(clip) = clip else { return false };
         let size = clip.dimensions[0] * clip.dimensions[1] * 3;
-        if animate && clip.frames.len() == size {
-            let path = crate::media::poster(name);
-            if let Ok(all) =
-                std::fs::read(&path).or_else(|_| std::fs::read(path.with_extension("numbered.rgb")))
-            {
-                if all.len() > size && all.len() <= size * 120 && all.len() % size == 0 {
-                    clip.frames = all;
-                    clip.start = Instant::now();
-                }
-            }
-        }
         let count = clip.frames.len() / size;
         if animate && count > 1 {
-            // Preserve legacy preview timing while new media tracks the device's 60 FPS.
-            let frame_ms = if count <= 12 {
-                167
-            } else if count <= 60 {
-                33
-            } else {
-                17
-            };
-            let i = (clip.start.elapsed().as_millis() / frame_ms) as usize % count;
+            let i = (clip.start.elapsed().as_millis() / PREVIEW_FRAME_MS) as usize % count;
             if i != clip.current {
                 clip.texture.set(
                     egui::ColorImage::from_rgb(
@@ -106,8 +76,7 @@ impl App {
                 );
                 clip.current = i;
             }
-            ui.ctx()
-                .request_repaint_after(Duration::from_millis(frame_ms as u64));
+            ui.ctx().request_repaint_after(Duration::from_millis(PREVIEW_FRAME_MS as u64));
         }
         let aspect = clip.dimensions[0] as f32 / clip.dimensions[1] as f32;
         let width = rect.width().min(rect.height() * aspect);
@@ -121,11 +90,9 @@ impl App {
         true
     }
 
-    pub(super) fn stage(&mut self, ui: &mut egui::Ui, rect: Rect, name: &str, focus: bool) {
+    fn stage(&mut self, ui: &mut egui::Ui, rect: Rect, name: &str, focus: bool) {
         let response = ui.interact(rect, ui.id().with(("preview-stage", name)), Sense::hover());
-        let glow = ui
-            .ctx()
-            .animate_bool(response.id, focus || response.hovered());
+        let glow = ui.ctx().animate_bool(response.id, focus || response.hovered());
         let p = ui.painter();
         p.rect_filled(rect, 13., Color32::from_rgb(8, 11, 15));
         if !self.artwork(ui, name, rect.shrink(5.), focus) {
@@ -155,11 +122,7 @@ impl App {
             ui.painter().text(
                 band.right_center() - vec2(12., 0.),
                 Align2::RIGHT_CENTER,
-                if focus {
-                    "LIVE PREVIEW"
-                } else {
-                    "2240 × 1080"
-                },
+                if focus { "LIVE PREVIEW" } else { "2240 × 1080" },
                 FontId::proportional(11.0),
                 if focus { ACCENT } else { DIM },
             );
@@ -247,12 +210,8 @@ impl App {
     pub(super) fn panorama_header(&mut self, ui: &mut egui::Ui) {
         ui.horizontal_wrapped(|ui| {
             ui.heading("PANORAMA");
-            if segment(ui, !self.display_tab, "Preset").clicked() {
-                self.display_tab = false;
-            }
-            if segment(ui, self.display_tab, "Tùy chỉnh").clicked() {
-                self.display_tab = true;
-            }
+            if segment(ui, !self.display_tab, "Preset").clicked() { self.display_tab = false; }
+            if segment(ui, self.display_tab, "Tùy chỉnh").clicked() { self.display_tab = true; }
             ui.checkbox(&mut self.draft.enabled, "Screen");
             let available = |name: &str| self.state.files.iter().any(|p| file_of(p) == name);
             let valid = if !self.display_tab {
@@ -272,25 +231,14 @@ impl App {
                         self.cfg.layout.loop_mode = 0;
                         self.cfg.playing = self.carousel.clone();
                     }
-                    let repeat = config::load_opt::<config::Config>(&config::config_path())
-                        .as_ref()
-                        == Some(&self.cfg);
+                    let repeat = config::load_opt::<config::Config>(&config::config_path()).as_ref() == Some(&self.cfg);
                     match config::save(&config::config_path(), &self.cfg) {
-                        Ok(()) => {
-                            if repeat {
-                                config::send_command("apply");
-                            }
-                            self.media_note.clear();
-                        }
+                        Ok(()) => { if repeat { config::send_command("apply"); } self.media_note.clear(); },
                         Err(e) => self.media_note = e.to_string(),
                     }
                 }
             });
-            if ui
-                .button("Khôi phục màn hình")
-                .on_hover_text("Phát Cooling delivery toàn màn hình và bật đèn nền")
-                .clicked()
-            {
+            if ui.button("Khôi phục màn hình").on_hover_text("Phát Cooling delivery toàn màn hình và bật đèn nền").clicked() {
                 let mut recovered = self.cfg.clone();
                 recovered.restore_screen();
                 match config::save(&config::config_path(), &recovered) {
@@ -309,14 +257,10 @@ impl App {
         ui.horizontal_wrapped(|ui| {
             ui.label(&self.state.message);
             if ui.small_button("Chép chẩn đoán phát").clicked() {
-                if let Some(trace) =
-                    config::load_opt::<String>(&config::data_dir().join("last-playback.json"))
-                {
+                if let Some(trace) = config::load_opt::<String>(&config::data_dir().join("last-playback.json")) {
                     ui.ctx().copy_text(trace);
                     self.media_note = "Đã chép chẩn đoán phát.".into();
-                } else {
-                    self.media_note = "Chưa có kết quả lệnh phát từ tản.".into();
-                }
+                } else { self.media_note = "Chưa có kết quả lệnh phát từ tản.".into(); }
             }
         });
         if !self.media_note.is_empty() {
@@ -336,30 +280,21 @@ impl App {
             .map(|p| file_of(p).to_owned())
             .collect();
         if self.display_tab {
-            egui::Frame::none()
-                .fill(CARD)
-                .stroke(Stroke::new(1.0_f32, BORDER))
-                .rounding(12.0)
-                .inner_margin(Margin::symmetric(14.0, 10.0))
-                .show(ui, |ui| {
-                    ui.horizontal_wrapped(|ui| {
-                        ui.label(RichText::new("BỐ CỤC").small().strong().color(DIM));
-                        if segment(ui, !self.draft.split, "Toàn màn hình").clicked() {
-                            self.draft.split = false;
+            egui::Frame::none().fill(CARD).stroke(Stroke::new(1.0_f32, BORDER))
+                .rounding(12.0).inner_margin(Margin::symmetric(14.0, 10.0)).show(ui, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(RichText::new("BỐ CỤC").small().strong().color(DIM));
+                    if segment(ui, !self.draft.split, "Toàn màn hình").clicked() { self.draft.split = false; }
+                    if segment(ui, self.draft.split, "Chia đôi").clicked() { self.draft.split = true; }
+                    ui.separator();
+                    ui.label(RichText::new("CHẾ ĐỘ PHÁT").small().strong().color(DIM));
+                    for (i, label) in ["Một lần", "Lặp", "Ngẫu nhiên"].iter().enumerate() {
+                        if segment(ui, self.draft.loop_mode == i as u64, label).clicked() {
+                            self.draft.loop_mode = i as u64;
                         }
-                        if segment(ui, self.draft.split, "Chia đôi").clicked() {
-                            self.draft.split = true;
-                        }
-                        ui.separator();
-                        ui.label(RichText::new("CHẾ ĐỘ PHÁT").small().strong().color(DIM));
-                        for (i, label) in ["Một lần", "Lặp", "Ngẫu nhiên"].iter().enumerate()
-                        {
-                            if segment(ui, self.draft.loop_mode == i as u64, label).clicked() {
-                                self.draft.loop_mode = i as u64;
-                            }
-                        }
-                    });
+                    }
                 });
+            });
             ui.add_space(8.0);
             let w = ui.available_width();
             let h = (w * 0.26).clamp(145., 245.);
@@ -426,45 +361,25 @@ impl App {
         ui.separator();
         if self.display_tab {
             ui.separator();
-            let media_files: Vec<String> = self
-                .state
-                .files
-                .iter()
-                .filter(|p| {
-                    p.contains("/media/")
-                        || p.contains("/user/")
-                        || p.rsplit('/').next() == Some(config::DOWNLOAD_46)
-                })
-                .map(|p| file_of(p).to_owned())
-                .collect();
-            ui.horizontal(|ui| {
-                ui.heading("Media của bạn");
-                pill(
-                    ui,
-                    Color32::from_rgb(96, 165, 250),
-                    &format!("{} tệp", media_files.len()),
-                );
-            });
-            ui.label(
-                RichText::new("Video cá nhân được tách khỏi preset có sẵn để dễ tìm và quản lý.")
-                    .color(DIM),
-            );
+            ui.heading("Thư viện media trên PANORAMA");
             ui.horizontal_wrapped(|ui| {
                 if ui
                     .add_enabled(
                         self.media_job.is_none(),
-                        egui::Button::new(
-                            RichText::new("+ Thêm video / GIF")
-                                .strong()
-                                .color(Color32::BLACK),
-                        )
-                        .fill(ACCENT)
-                        .rounding(9.)
-                        .min_size(vec2(180., 40.)),
+                        egui::Button::new("Thêm video / GIF").min_size(vec2(165., 40.)),
                     )
                     .clicked()
                 {
                     self.pick_media(None);
+                }
+                if ui
+                    .add_sized(
+                        [250., 42.],
+                        egui::Button::new("Mở thư viện Wallpaper Engine"),
+                    )
+                    .clicked()
+                {
+                    crate::spawn_self("--library");
                 }
                 if ui.button("GIPHY").clicked() {
                     crate::spawn_self("--giphy");
@@ -488,20 +403,7 @@ impl App {
                     }
                 }
             });
-            if media_files.is_empty() {
-                card(ui, |ui| {
-                    ui.vertical_centered(|ui| {
-                        ui.label(RichText::new("Thư viện đang trống").size(18.).strong());
-                        ui.label(
-                            RichText::new(
-                                "Thêm video hoặc GIF để tạo bộ sưu tập riêng cho PANORAMA.",
-                            )
-                            .color(DIM),
-                        );
-                    });
-                });
-            }
-            let cols = ((ui.available_width() + 8.) / 250.).floor().max(1.) as usize;
+            let cols = ((ui.available_width() + 8.) / 230.).floor().max(1.) as usize;
             let mut visible = if self.draft.split {
                 vec![self.draft.left.clone(), self.draft.right.clone()]
             } else {
@@ -511,14 +413,13 @@ impl App {
                 .id_salt("custom-media")
                 .min_scrolled_height(240.)
                 .max_height(480.)
-                .show_rows(ui, 154., media_files.len().div_ceil(cols), |ui, rows| {
+                .show_rows(ui, 142., files.len().div_ceil(cols), |ui, rows| {
                     for row in rows {
                         ui.horizontal(|ui| {
                             let width =
                                 (ui.available_width() - 8. * (cols - 1) as f32) / cols as f32;
-                            for file in media_files.iter().skip(row * cols).take(cols) {
-                                let (rect, _) =
-                                    ui.allocate_exact_size(vec2(width, 154.), Sense::hover());
+                            for file in files.iter().skip(row * cols).take(cols) {
+                                let (rect, _) = ui.allocate_exact_size(vec2(width, 142.), Sense::hover());
                                 let mut select_box = rect;
                                 let active = if !self.draft.split {
                                     file == &self.full
@@ -538,10 +439,7 @@ impl App {
                                 visible.push(file.clone());
                                 if let Some(path) = self.state.files.iter().find(|p| {
                                     p.rsplit_once('/').is_some_and(|(dir, n)| {
-                                        (dir.ends_with("/media")
-                                            || dir.ends_with("/user")
-                                            || n == config::DOWNLOAD_46)
-                                            && n == file
+                                        (dir.ends_with("/media") || dir.ends_with("/user") || n == config::DOWNLOAD_46) && n == file
                                     })
                                 }) {
                                     let delete_box = Rect::from_min_size(
@@ -595,11 +493,7 @@ impl App {
                                         }
                                     }
                                 }
-                                let select = ui.interact(
-                                    select_box,
-                                    ui.id().with(("select", file)),
-                                    Sense::click(),
-                                );
+                                let select = ui.interact(select_box, ui.id().with(("select", file)), Sense::click());
                                 if select.on_hover_text(file).clicked() {
                                     let slot = if !self.draft.split {
                                         &mut self.full
@@ -615,6 +509,59 @@ impl App {
                     }
                 });
             self.clips.retain(|k, _| visible.contains(k));
+            ui.separator();
+            ui.strong("Wallpaper Engine");
+            ui.horizontal_wrapped(|ui| {
+                ui.label("Màn hình PC");
+                if ui
+                    .add(egui::DragValue::new(&mut self.wallpaper_monitor).range(0..=31))
+                    .changed()
+                {
+                    self.wallpaper = None;
+                    self.wallpaper_query = None;
+                    self.wallpaper_note.clear();
+                }
+                if ui
+                    .add_enabled(
+                        self.wallpaper_query.is_none(),
+                        egui::Button::new("Kết nối / đọc wallpaper đang chạy"),
+                    )
+                    .clicked()
+                {
+                    let monitor = self.wallpaper_monitor;
+                    let (tx, rx) = std::sync::mpsc::channel();
+                    self.wallpaper_query = Some(rx);
+                    self.wallpaper = None;
+                    self.wallpaper_note = "Đang hỏi Wallpaper Engine…".into();
+                    std::thread::spawn(move || {
+                        let _ = tx.send(crate::media::active_wallpaper(monitor));
+                    });
+                }
+                if let Some(active) = &self.wallpaper {
+                    ui.label(&active.title);
+                    if ui
+                        .add_enabled(
+                            self.media_job.is_none(),
+                            egui::Button::new("Nhập vào PANORAMA"),
+                        )
+                        .clicked()
+                    {
+                        let path = active.source.clone();
+                        let project = active.project;
+                        let (tx, rx) = std::sync::mpsc::channel();
+                        self.media_job = Some(rx);
+                        self.media_note = "Đang chuẩn bị wallpaper…".into();
+                        std::thread::spawn(move || {
+                            let _ = tx.send(crate::media::import_wallpaper(path, project));
+                        });
+                    }
+                }
+            });
+
+            if !self.wallpaper_note.is_empty() {
+                ui.label(&self.wallpaper_note);
+            }
+            ui.separator();
         }
         ui.collapsing("Cài đặt màn hình", |ui| {
             self.display_card(ui);

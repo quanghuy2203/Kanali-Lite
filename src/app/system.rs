@@ -69,13 +69,12 @@ impl Monitor {
         let mut out = Telemetry {
             cpu,
             memory,
-            memory_used_gb: (mem.ullTotalPhys.saturating_sub(mem.ullAvailPhys)) as f32
-                / 1_073_741_824.0,
-            memory_total_gb: mem.ullTotalPhys as f32 / 1_073_741_824.0,
+            memory_used_gb:(mem.ullTotalPhys.saturating_sub(mem.ullAvailPhys)) as f32/1_073_741_824.0,
+            memory_total_gb:mem.ullTotalPhys as f32/1_073_741_824.0,
             ..Default::default()
         };
         if let Some(nv) = &self.nvml {
-            use nvml_wrapper::enum_wrappers::device::{Clock, TemperatureSensor};
+            use nvml_wrapper::enum_wrappers::device::{Clock,TemperatureSensor};
             if let Ok(g) = nv.device_by_index(0) {
                 out.gpu = g
                     .utilization_rates()
@@ -83,12 +82,9 @@ impl Monitor {
                     .unwrap_or(0);
                 out.gpu_temp = g.temperature(TemperatureSensor::Gpu).ok();
                 out.gpu_power_w = g.power_usage().ok().map(|v| v as f32 / 1000.0);
-                if let Ok(m) = g.memory_info() {
-                    out.gpu_memory_used_gb = Some(m.used as f32 / 1_073_741_824.0);
-                    out.gpu_memory_total_gb = Some(m.total as f32 / 1_073_741_824.0);
-                }
-                out.gpu_clock_mhz = g.clock_info(Clock::Graphics).ok();
-                out.gpu_fan = g.fan_speed(0).ok();
+                if let Ok(m)=g.memory_info(){out.gpu_memory_used_gb=Some(m.used as f32/1_073_741_824.0);out.gpu_memory_total_gb=Some(m.total as f32/1_073_741_824.0);}
+                out.gpu_clock_mhz=g.clock_info(Clock::Graphics).ok();
+                out.gpu_fan=g.fan_speed(0).ok();
             }
         }
         out
@@ -196,17 +192,10 @@ impl Empty for String {
 }
 
 pub fn take_over_and_off() -> Result<String, String> {
-    if service_running("LConnectServiceWatcher") {
-        sc("stop", "LConnectServiceWatcher")?;
-    }
-    if service_running("LConnectService") {
-        sc("stop", "LConnectService")?;
-    }
+    if service_running("LConnectServiceWatcher") { sc("stop", "LConnectServiceWatcher")?; }
+    if service_running("LConnectService") { sc("stop", "LConnectService")?; }
     // L-Connect leaves its bundled OpenRGB worker alive after its service stops.
-    let _ = Command::new("taskkill.exe")
-        .args(["/IM", "OpenRGB.exe", "/F"])
-        .creation_flags(HIDDEN)
-        .output();
+    let _=Command::new("taskkill.exe").args(["/IM","OpenRGB.exe","/F"]).creation_flags(HIDDEN).output();
     std::thread::sleep(std::time::Duration::from_millis(700));
     // "off" is not a portable OpenRGB mode. Black + zero brightness works for
     // both Direct and Static controllers and applies to every detected device.
@@ -216,68 +205,13 @@ pub fn take_over_and_off() -> Result<String, String> {
         .spawn()
         .map_err(|e| format!("Không mở được OpenRGB: {e}"))?;
     for _ in 0..40 {
-        if let Some(status) = child.try_wait().map_err(|e| e.to_string())? {
-            let ram = lexar_ram_off();
-            return match (status.success(), ram) {
-                (true, Ok(())) => Ok("Đã tắt LED GPU và RAM Lexar".into()),
-                (true, Err(e)) => Err(format!("GPU đã tắt; RAM Lexar chưa tắt được: {e}")),
-                (false, Ok(())) => Ok("Đã tắt RAM Lexar; OpenRGB chưa nhận GPU".into()),
-                (false, Err(e)) => Err(format!("Không tìm thấy bộ điều khiển LED: {e}")),
-            };
+        if let Some(status)=child.try_wait().map_err(|e|e.to_string())? {
+            return if status.success(){Ok("Đã giành quyền và đặt toàn bộ LED về 0% / màu đen".into())}else{Err("OpenRGB không tìm thấy bộ điều khiển tương thích".into())};
         }
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
-    let _ = child.kill();
-    lexar_ram_off()?;
-    Ok("Đã gửi lệnh tắt LED GPU và RAM Lexar".into())
-}
-
-fn lexar_ram_off() -> Result<(), String> {
-    let appdata = std::env::var_os("APPDATA").ok_or("Không tìm thấy APPDATA")?;
-    let config = std::path::PathBuf::from(appdata)
-        .join("Lexar RGB Sync")
-        .join("config");
-    let exe = std::path::Path::new(r"C:\Program Files (x86)\Lexar RGB Sync\Gaming.exe");
-    if !config.is_file() || !exe.is_file() {
-        return Err("Chưa cài Lexar RGB Sync".into());
-    }
-    let mut text = std::fs::read_to_string(&config).map_err(|e| e.to_string())?;
-    for (key, value) in [
-        ("led_sw", "0"),
-        ("audio_sw", "0"),
-        ("sync_sw", "0"),
-        ("Show_TrayIcon", "0"),
-        ("Show_OSD", "0"),
-    ] {
-        let prefix = format!("{key}=");
-        if let Some(line) = text.lines().find(|l| l.starts_with(&prefix)) {
-            text = text.replacen(line, &format!("{prefix}{value}"), 1);
-        }
-    }
-    let backup = config.with_extension("kanali-backup");
-    if !backup.exists() {
-        let _ = std::fs::copy(&config, &backup);
-    }
-    std::fs::write(&config, text).map_err(|e| e.to_string())?;
-    for name in ["Gaming.exe", "hid.exe"] {
-        let _ = Command::new("taskkill.exe")
-            .args(["/IM", name, "/F"])
-            .creation_flags(HIDDEN)
-            .output();
-    }
-    let mut child = Command::new(exe)
-        .creation_flags(HIDDEN)
-        .spawn()
-        .map_err(|e| e.to_string())?;
-    std::thread::sleep(std::time::Duration::from_millis(2500));
-    if child.try_wait().ok().flatten().is_none() {
-        let _ = child.kill();
-    }
-    let _ = Command::new("taskkill.exe")
-        .args(["/IM", "hid.exe", "/F"])
-        .creation_flags(HIDDEN)
-        .output();
-    Ok(())
+    let _=child.kill();
+    Ok("Đã gửi lệnh tắt LED; OpenRGB được đóng sau khi áp dụng".into())
 }
 
 pub fn release() -> Result<String, String> {
