@@ -284,11 +284,6 @@ struct App {
     draft: config::Layout,
     full: String,
     right_slot: bool,
-    wallpaper: Option<crate::media::ActiveWallpaper>,
-    wallpaper_query:
-        Option<std::sync::mpsc::Receiver<Result<crate::media::ActiveWallpaper, String>>>,
-    wallpaper_monitor: u32,
-    wallpaper_note: String,
     gif_id: Option<String>,
     assets_ready: std::sync::mpsc::Receiver<()>,
     cfg: Config,
@@ -316,10 +311,6 @@ impl App {
             carousel: cfg.playing.clone(),
             clips: Default::default(),
             right_slot: false,
-            wallpaper: None,
-            wallpaper_query: None,
-            wallpaper_monitor: 0,
-            wallpaper_note: String::new(),
             gif_id: None,
             assets_ready,
             media_job: None,
@@ -365,7 +356,7 @@ impl App {
                     (WARN, "Đang chờ màn hình")
                 };
                 pill(ui, color, text);
-                if self.media_job.is_some() || self.wallpaper_query.is_some() {
+                if self.media_job.is_some() {
                     ui.spinner();
                     ui.label(RichText::new("Đang xử lý").small().color(DIM));
                 }
@@ -375,6 +366,7 @@ impl App {
     }
 
     fn home_hero(&mut self, ui: &mut egui::Ui) {
+        let playing = self.cfg.playing.clone();
         let hero = egui::Frame::none()
             .fill(CARD)
             .stroke(Stroke::new(1.0_f32, BORDER))
@@ -396,7 +388,7 @@ impl App {
                         );
                         ui.label(
                             RichText::new(
-                                "Chọn preset, nhập wallpaper và điều khiển màn hình từ một nơi.",
+                                "Xem nội dung đang phát và điều khiển PANORAMA từ một nơi.",
                             )
                             .color(DIM),
                         );
@@ -407,22 +399,12 @@ impl App {
                         }
                     });
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let (rect, _) =
-                            ui.allocate_exact_size(vec2(148.0, 88.0), egui::Sense::hover());
-                        ui.painter()
-                            .rect_filled(rect, 13.0, Color32::from_rgb(11, 14, 19));
-                        ui.painter().rect_stroke(
-                            rect,
-                            13.0,
-                            Stroke::new(2.0_f32, ACCENT.gamma_multiply(0.75)),
+                        let width = ui.available_width().clamp(260.0, 420.0);
+                        let (rect, _) = ui.allocate_exact_size(
+                            vec2(width, width * 1080.0 / 2240.0),
+                            egui::Sense::hover(),
                         );
-                        ui.painter().text(
-                            rect.center(),
-                            egui::Align2::CENTER_CENTER,
-                            "2240 × 1080",
-                            egui::FontId::proportional(15.0),
-                            ACCENT,
-                        );
+                        self.stage(ui, rect, &playing, true);
                     });
                 });
                 if self.alive() && self.state.connected {
@@ -432,7 +414,10 @@ impl App {
                 }
             });
         let phase = ((ui.ctx().input(|i| i.time) * 0.16) % 1.0) as f32;
-        let x = egui::lerp(hero.response.rect.left()..=hero.response.rect.right(), phase);
+        let x = egui::lerp(
+            hero.response.rect.left()..=hero.response.rect.right(),
+            phase,
+        );
         ui.painter().circle_filled(
             egui::pos2(x, hero.response.rect.top() + 1.0),
             24.0,
@@ -461,33 +446,36 @@ impl App {
             .map(|i| i.resolution.as_str())
             .filter(|s| !s.is_empty())
             .unwrap_or("—");
-        let t = &self.state.telemetry;
+        let personal = self
+            .state
+            .files
+            .iter()
+            .filter(|p| p.contains("/media/") || p.contains("/user/"))
+            .count();
         let metrics = [
-            (
-                "CPU",
-                format!("{}%", t.cpu),
-                "Tải bộ xử lý".to_owned(),
-                Color32::from_rgb(56, 189, 248),
-            ),
-            (
-                "GPU",
-                format!("{}%", t.gpu),
-                t.gpu_temp
-                    .map(|n| format!("{n}°C · {:.0} W", t.gpu_power_w.unwrap_or(0.)))
-                    .unwrap_or_else(|| "Đang đọc cảm biến".into()),
-                Color32::from_rgb(167, 139, 250),
-            ),
-            (
-                "BỘ NHỚ",
-                format!("{}%", t.memory),
-                "RAM đang sử dụng".to_owned(),
-                GOOD,
-            ),
             (
                 "PANORAMA",
                 status.0.to_owned(),
-                format!("{resolution} · {}% sáng", self.cfg.level),
+                format!("{resolution} · USB"),
                 status.2,
+            ),
+            (
+                "ĐANG PHÁT",
+                short(&label_of(&self.cfg.playing), 18),
+                "Preview 60 FPS".to_owned(),
+                ACCENT,
+            ),
+            (
+                "MEDIA CÁ NHÂN",
+                personal.to_string(),
+                "Tệp trong thư viện".to_owned(),
+                Color32::from_rgb(96, 165, 250),
+            ),
+            (
+                "ĐỘ SÁNG",
+                format!("{}%", self.cfg.level),
+                "Mức trên màn hình".to_owned(),
+                WARN,
             ),
         ];
         let columns = if ui.available_width() >= 760.0 { 4 } else { 2 };
@@ -506,27 +494,89 @@ impl App {
         card(ui, |ui| {
             title(ui, "Hiệu năng thời gian thực");
             ui.columns(2, |cols| {
-                cols[0].label(RichText::new("HỆ THỐNG").small().strong().color(Color32::from_rgb(56, 189, 248)));
-                cols[0].add(egui::ProgressBar::new(t.cpu as f32 / 100.0).text(format!("CPU  {}%", t.cpu)).fill(Color32::from_rgb(56, 189, 248)));
-                cols[0].add(egui::ProgressBar::new(t.memory as f32 / 100.0).text(format!("RAM  {:.1} / {:.1} GB", t.memory_used_gb, t.memory_total_gb)).fill(GOOD));
-                cols[1].label(RichText::new("GPU NVIDIA").small().strong().color(Color32::from_rgb(167, 139, 250)));
-                cols[1].add(egui::ProgressBar::new(t.gpu as f32 / 100.0).text(format!("GPU  {}%", t.gpu)).fill(Color32::from_rgb(167, 139, 250)));
-                let vram = match (t.gpu_memory_used_gb, t.gpu_memory_total_gb) { (Some(u), Some(n)) => format!("VRAM  {u:.1} / {n:.1} GB"), _ => "VRAM  —".into() };
-                let ratio = match t.gpu_memory_used_gb.zip(t.gpu_memory_total_gb) { Some((u, n)) if n > 0.0 => u / n, _ => 0.0 };
-                cols[1].add(egui::ProgressBar::new(ratio).text(vram).fill(Color32::from_rgb(244, 114, 182)));
+                cols[0].label(
+                    RichText::new("HỆ THỐNG")
+                        .small()
+                        .strong()
+                        .color(Color32::from_rgb(56, 189, 248)),
+                );
+                cols[0].add(
+                    egui::ProgressBar::new(t.cpu as f32 / 100.0)
+                        .text(format!("CPU  {}%", t.cpu))
+                        .fill(Color32::from_rgb(56, 189, 248)),
+                );
+                cols[0].add(
+                    egui::ProgressBar::new(t.memory as f32 / 100.0)
+                        .text(format!(
+                            "RAM  {:.1} / {:.1} GB",
+                            t.memory_used_gb, t.memory_total_gb
+                        ))
+                        .fill(GOOD),
+                );
+                cols[1].label(
+                    RichText::new("GPU NVIDIA")
+                        .small()
+                        .strong()
+                        .color(Color32::from_rgb(167, 139, 250)),
+                );
+                cols[1].add(
+                    egui::ProgressBar::new(t.gpu as f32 / 100.0)
+                        .text(format!("GPU  {}%", t.gpu))
+                        .fill(Color32::from_rgb(167, 139, 250)),
+                );
+                let vram = match (t.gpu_memory_used_gb, t.gpu_memory_total_gb) {
+                    (Some(u), Some(n)) => format!("VRAM  {u:.1} / {n:.1} GB"),
+                    _ => "VRAM  —".into(),
+                };
+                let ratio = match t.gpu_memory_used_gb.zip(t.gpu_memory_total_gb) {
+                    Some((u, n)) if n > 0.0 => u / n,
+                    _ => 0.0,
+                };
+                cols[1].add(
+                    egui::ProgressBar::new(ratio)
+                        .text(vram)
+                        .fill(Color32::from_rgb(244, 114, 182)),
+                );
             });
             ui.add_space(8.0);
             ui.separator();
             ui.columns(4, |c| {
                 let values = [
-                    ("NHIỆT ĐỘ GPU", t.gpu_temp.map(|v| format!("{v}°C")).unwrap_or_else(|| "—".into())),
-                    ("XUNG GPU", t.gpu_clock_mhz.map(|v| format!("{v} MHz")).unwrap_or_else(|| "—".into())),
-                    ("CÔNG SUẤT", t.gpu_power_w.map(|v| format!("{v:.0} W")).unwrap_or_else(|| "—".into())),
-                    ("QUẠT GPU", t.gpu_fan.map(|v| format!("{v}%")).unwrap_or_else(|| "0% / passive".into())),
+                    (
+                        "NHIỆT ĐỘ GPU",
+                        t.gpu_temp
+                            .map(|v| format!("{v}°C"))
+                            .unwrap_or_else(|| "—".into()),
+                    ),
+                    (
+                        "XUNG GPU",
+                        t.gpu_clock_mhz
+                            .map(|v| format!("{v} MHz"))
+                            .unwrap_or_else(|| "—".into()),
+                    ),
+                    (
+                        "CÔNG SUẤT",
+                        t.gpu_power_w
+                            .map(|v| format!("{v:.0} W"))
+                            .unwrap_or_else(|| "—".into()),
+                    ),
+                    (
+                        "QUẠT GPU",
+                        t.gpu_fan
+                            .map(|v| format!("{v}%"))
+                            .unwrap_or_else(|| "0% / passive".into()),
+                    ),
                 ];
-                for (col, (label, value)) in c.iter_mut().zip(values) { col.label(RichText::new(label).small().color(DIM)); col.label(RichText::new(value).size(18.0).strong()); }
+                for (col, (label, value)) in c.iter_mut().zip(values) {
+                    col.label(RichText::new(label).small().color(DIM));
+                    col.label(RichText::new(value).size(18.0).strong());
+                }
             });
-            ui.label(RichText::new("Cảm biến lấy mẫu mỗi 2 giây; hiệu ứng chỉ chạy khi mở Trang chủ.").small().color(DIM));
+            ui.label(
+                RichText::new("Cảm biến lấy mẫu mỗi 2 giây; hiệu ứng chỉ chạy khi mở Trang chủ.")
+                    .small()
+                    .color(DIM),
+            );
         });
     }
 
@@ -805,25 +855,6 @@ impl App {
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        if let Some(rx) = &self.wallpaper_query {
-            match rx.try_recv() {
-                Ok(Ok(active)) => {
-                    self.wallpaper = Some(active);
-                    self.wallpaper_note.clear();
-                    self.wallpaper_query = None;
-                }
-                Ok(Err(e)) => {
-                    self.wallpaper = None;
-                    self.wallpaper_note = e;
-                    self.wallpaper_query = None;
-                }
-                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                    self.wallpaper_note = "Kết nối bị gián đoạn".into();
-                    self.wallpaper_query = None;
-                }
-                _ => (),
-            }
-        }
         if let Some(job) = &self.media_job {
             match job.try_recv() {
                 Ok(result) => {
@@ -993,6 +1024,10 @@ impl eframe::App for App {
                 });
             });
 
-        ctx.request_repaint_after(if self.page==Page::Home {Duration::from_millis(100)} else {Duration::from_millis(1000)});
+        ctx.request_repaint_after(if self.page == Page::Home {
+            Duration::from_millis(100)
+        } else {
+            Duration::from_millis(1000)
+        });
     }
 }
