@@ -66,10 +66,31 @@ impl App {
                 start: Instant::now(),
                 current: 0,
                 fps,
+                stream: None,
+                stream_stop: None,
             })
         });
         let Some(clip) = clip else { return false };
         let size = clip.dimensions[0] * clip.dimensions[1] * 3;
+        if animate && clip.stream.is_none() && crate::media::poster(name).with_extension("preview.mp4").is_file() {
+            let duration = std::fs::read_to_string(crate::media::poster(name).with_extension("duration"))
+                .ok().and_then(|v| v.parse::<f64>().ok()).unwrap_or(1.0).max(0.1);
+            let elapsed = config::now_ms().saturating_sub(self.state.playback_started_ms) as f64 / 1000.0;
+            if let Some((rx, stop)) = crate::media::preview_stream(name, elapsed % duration) {
+                clip.stream = Some(rx);
+                clip.stream_stop = Some(stop);
+            }
+        }
+        if animate {
+            if let Some(rx) = &clip.stream {
+                let mut latest = None;
+                while let Ok(frame) = rx.try_recv() { latest = Some(frame); }
+                if let Some(frame) = latest {
+                    clip.texture.set(egui::ColorImage::from_rgb([480, 232], &frame), Default::default());
+                }
+                ui.ctx().request_repaint_after(Duration::from_millis(16));
+            }
+        }
         if animate && clip.frames.len() == size {
             let path = crate::media::poster(name);
             if let Ok(all) = std::fs::read(&path)
@@ -82,7 +103,7 @@ impl App {
             }
         }
         let count = clip.frames.len() / size;
-        if animate && count > 1 {
+        if animate && clip.stream.is_none() && count > 1 {
             // Cross-fade the compact source frames at display refresh speed. This
             // keeps old 6 FPS posters visually fluid without decoding video in UI.
             let elapsed = clip.start.elapsed().as_secs_f32();
@@ -373,6 +394,9 @@ impl App {
                     crate::spawn_self("--library");
                 }
                 if ui.button("GIPHY").clicked() {
+                    let _ = std::fs::remove_file(config::data_dir().join("giphy-item.json"));
+                    self.gif_id = None;
+                    self.media_note = "Chọn một GIF; Kanali sẽ tự nhập và gửi tới PANORAMA.".into();
                     crate::spawn_self("--giphy");
                 }
                 if let Some(id) = self.gif_id.as_ref() {

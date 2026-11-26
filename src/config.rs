@@ -134,6 +134,7 @@ pub struct State {
     pub update: UpdateInfo,
     pub updated_ms: u64,
     pub media_status: String,
+    pub playback_started_ms: u64,
     pub telemetry: Telemetry,
     pub lighting: LightingInfo,
 }

@@ -258,7 +258,7 @@ fn lexar_ram_off() -> Result<(), String> {
     // Lexar's own guide requires LED OFF to be committed with Apply. The UI is
     // custom-drawn, so click its documented skin coordinates through window
     // messages while both processes run at the same elevated integrity level.
-    use windows::{core::HSTRING, Win32::{Foundation::{LPARAM, WPARAM}, UI::WindowsAndMessaging::{FindWindowW, GetClientRect, PostMessageW, WM_CLOSE, WM_LBUTTONDOWN, WM_LBUTTONUP}}};
+    use windows::{core::HSTRING, Win32::{Foundation::{LPARAM, WPARAM}, UI::{Input::KeyboardAndMouse::{SendInput, INPUT, INPUT_MOUSE, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP}, WindowsAndMessaging::{FindWindowW, GetWindowRect, PostMessageW, SetCursorPos, SetForegroundWindow, ShowWindow, SW_RESTORE, WM_CLOSE}}}};
     let title = HSTRING::from("Lexar RGB Sync_Config");
     let started = std::time::Instant::now();
     let window = loop {
@@ -269,14 +269,20 @@ fn lexar_ram_off() -> Result<(), String> {
         std::thread::sleep(std::time::Duration::from_millis(150));
     };
     let mut rect = windows::Win32::Foundation::RECT::default();
-    unsafe { GetClientRect(window, &mut rect) }.map_err(|e| e.to_string())?;
+    unsafe { GetWindowRect(window, &mut rect) }.map_err(|e| e.to_string())?;
+    unsafe { let _ = ShowWindow(window, SW_RESTORE); let _ = SetForegroundWindow(window); }
+    std::thread::sleep(std::time::Duration::from_millis(300));
     let click = |x: i32, y: i32| -> Result<(), String> {
-        let sx = x * (rect.right - rect.left).max(1) / 1100;
-        let sy = y * (rect.bottom - rect.top).max(1) / 480;
-        let point = LPARAM(((sy as isize) << 16) | (sx as isize & 0xffff));
-        unsafe { PostMessageW(window, WM_LBUTTONDOWN, WPARAM(1), point) }.map_err(|e| e.to_string())?;
-        unsafe { PostMessageW(window, WM_LBUTTONUP, WPARAM(0), point) }.map_err(|e| e.to_string())?;
-        Ok(())
+        let sx = rect.left + x * (rect.right - rect.left).max(1) / 1100;
+        let sy = rect.top + y * (rect.bottom - rect.top).max(1) / 480;
+        unsafe { SetCursorPos(sx, sy) }.map_err(|e| e.to_string())?;
+        let mut input: [INPUT; 2] = unsafe { std::mem::zeroed() };
+        input[0].r#type = INPUT_MOUSE;
+        input[0].Anonymous.mi.dwFlags = MOUSEEVENTF_LEFTDOWN;
+        input[1].r#type = INPUT_MOUSE;
+        input[1].Anonymous.mi.dwFlags = MOUSEEVENTF_LEFTUP;
+        let sent = unsafe { SendInput(&input, std::mem::size_of::<INPUT>() as i32) };
+        if sent == 2 { Ok(()) } else { Err("Windows không gửi được thao tác chuột tới Lexar RGB Sync".into()) }
     };
     click(916, 58)?; // LED OFF
     std::thread::sleep(std::time::Duration::from_millis(350));

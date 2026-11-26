@@ -25,8 +25,23 @@ pub fn browse() -> Result<(), String> {
         .map_err(|e| e.to_string())?;
     let mut session = WebContext::new(Some(config::data_dir().join("GiphyBrowser")));
     let proxy = events.create_proxy();
+    let selection_proxy = proxy.clone();
     let browser = WebViewBuilder::with_web_context(&mut session)
         .with_url("https://giphy.com/")
+        .with_initialization_script(r#"
+            document.addEventListener('click', event => {
+              const link = event.target.closest && event.target.closest('a[href*="/gifs/"]');
+              if (link && link.href) window.ipc.postMessage('select:' + link.href);
+            }, true);
+        "#)
+        .with_ipc_handler(move |request| {
+            let Some(raw) = request.body().strip_prefix("select:") else { return; };
+            let Some(url) = page_url(raw) else { return; };
+            let Some(id) = url.path().trim_end_matches('/').rsplit('-').next()
+                .and_then(|v| v.rsplit('/').next()).filter(|id| valid_gif_id(id)) else { return; };
+            let _ = config::save(&config::data_dir().join("giphy-item.json"), &id);
+            let _ = selection_proxy.send_event("selected".into());
+        })
         .with_navigation_handler(move |raw| {
             let Some(url) = page_url(&raw) else {
                 return false;
@@ -62,7 +77,8 @@ pub fn browse() -> Result<(), String> {
                 ..
             } => *flow = ControlFlow::Exit,
             Event::UserEvent(url) => {
-                let _ = browser.load_url(&url);
+                if url == "selected" { *flow = ControlFlow::Exit; }
+                else { let _ = browser.load_url(&url); }
             }
             _ => (),
         }

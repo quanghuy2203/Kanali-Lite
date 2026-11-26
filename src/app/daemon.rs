@@ -117,6 +117,7 @@ fn session(sh: &Arc<Shared>) -> Result<(), String> {
     let initial = device::apply_play(&mut f, &cfg);
     sh.with(|s| {
         s.connected = true;
+        if initial.is_ok() { s.playback_started_ms = config::now_ms(); }
         s.message = initial.err().unwrap_or_else(|| "Đã kết nối".into());
         s.info = Some(info);
         s.files = files;
@@ -204,6 +205,7 @@ fn session(sh: &Arc<Shared>) -> Result<(), String> {
                 match device::apply_play(&mut f, &new) {
                     Ok(()) => {
                         sh.with(|s| {
+                            s.playback_started_ms = config::now_ms();
                             s.message = format!("PANORAMA đã nhận cấu hình phát {}", new.playing)
                         });
                     }

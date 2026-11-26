@@ -299,6 +299,16 @@ struct Clip {
     start: Instant,
     current: usize,
     fps: f32,
+    stream: Option<std::sync::mpsc::Receiver<Vec<u8>>>,
+    stream_stop: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+}
+
+impl Drop for Clip {
+    fn drop(&mut self) {
+        if let Some(stop) = &self.stream_stop {
+            stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
 }
 
 struct App {
@@ -447,6 +457,11 @@ impl App {
         let painter = ui.painter().with_clip_rect(bounds);
         // Lightweight ambient telemetry field: deterministic particles and a
         // slow scan line, drawn only while Home is visible.
+        for (i, color) in [Color32::from_rgb(221, 245, 76), Color32::from_rgb(56, 189, 248), Color32::from_rgb(167, 139, 250)].into_iter().enumerate() {
+            let angle = time * (0.11 + i as f32 * 0.025) + i as f32 * 2.1;
+            let center = bounds.center() + vec2(angle.cos() * bounds.width() * 0.34, angle.sin() * bounds.height() * 0.28);
+            painter.circle_filled(center, 75.0 + i as f32 * 24.0, color.gamma_multiply(0.018));
+        }
         for i in 0..14 {
             let seed = i as f32 * 0.618_034;
             let x = bounds.left() + ((seed + time * (0.008 + i as f32 * 0.0004)).fract()) * bounds.width();
@@ -898,7 +913,16 @@ impl eframe::App for App {
                 }
                 self.state = s;
             }
-            self.gif_id = config::load_opt(&config::data_dir().join("giphy-item.json"));
+            if let Some(id) = config::load_opt::<String>(&config::data_dir().join("giphy-item.json")) {
+                let _ = std::fs::remove_file(config::data_dir().join("giphy-item.json"));
+                self.gif_id = Some(id.clone());
+                if self.media_job.is_none() {
+                    let (tx, rx) = std::sync::mpsc::channel();
+                    self.media_job = Some(rx);
+                    self.media_note = "Đang tải, chuyển đổi và gửi GIF tới PANORAMA…".into();
+                    std::thread::spawn(move || { let _ = tx.send(crate::giphy::import_gif(&id)); });
+                }
+            }
             self.last_read = Instant::now();
         }
 
