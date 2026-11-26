@@ -371,7 +371,15 @@ fn ram_effect_matches(config: &str, effect: &str, color: &str) -> bool {
 }
 
 fn lexar_ram_apply(effect: &str, color: &str) -> Result<(), String> {
-    use windows::{core::HSTRING, Win32::UI::WindowsAndMessaging::{FindWindowW, ShowWindow, SW_HIDE}};
+    use windows::{
+        core::HSTRING,
+        Win32::{
+            Foundation::{LPARAM, WPARAM},
+            UI::WindowsAndMessaging::{
+                FindWindowW, GetDlgItem, SendMessageW, ShowWindow, BM_CLICK, SW_HIDE,
+            },
+        },
+    };
     let bridge = ensure_lexar_bridge()?;
     let config =
         std::path::PathBuf::from(std::env::var_os("APPDATA").ok_or("Không tìm thấy APPDATA")?)
@@ -418,9 +426,22 @@ fn lexar_ram_apply(effect: &str, color: &str) -> Result<(), String> {
         if started.elapsed() > std::time::Duration::from_secs(12) {
             return Err("Lexar RGB Sync không mở được cửa sổ điều khiển".into());
         }
-        std::thread::sleep(std::time::Duration::from_millis(150));
+        std::thread::sleep(std::time::Duration::from_millis(10));
     };
     unsafe { let _ = ShowWindow(window, SW_HIDE); }
+    // Gaming.exe is only Kanali's hidden vendor bridge. Loading a profile does
+    // not program SMBus by itself: the real Apply control must be invoked.
+    // Without this, the UI displays the requested color but the DIMMs keep the
+    // previous hardware state.
+    let apply = unsafe { GetDlgItem(window, 18_309_376) }
+        .map_err(|_| "Bridge Lexar thiếu nút Apply")?;
+    unsafe { SendMessageW(apply, BM_CLICK, WPARAM(0), LPARAM(0)); }
+    std::thread::sleep(std::time::Duration::from_millis(450));
+    unsafe { let _ = ShowWindow(window, SW_HIDE); }
+    // The visible configurator is not needed after Apply. Keep only hid.exe,
+    // which owns the signed SMBus connection, warm in Kanali's background.
+    let _ = Command::new("taskkill.exe").args(["/IM", "Gaming.exe", "/F"])
+        .creation_flags(HIDDEN).output();
     let committed = std::fs::read_to_string(&config).unwrap_or_default();
     let expected = if effect == "off" { "led_sw=0" } else { "led_sw=1" };
     if committed.lines().any(|line| line == expected)
