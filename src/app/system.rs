@@ -392,7 +392,6 @@ fn lexar_ram_apply(effect: &str, color: &str) -> Result<(), String> {
             "rainbow" => 18_326_144,
             _ => 18_323_648,
         })?;
-        click(18_333_024)?; // LED 1; Synchronize mirrors it across the DIMMs.
         let palette = ["FF0000", "FFFF00", "00FF00", "00FFFF", "0000FF"];
         let wanted = u32::from_str_radix(color, 16).unwrap_or(0);
         let channel = |value: u32, shift: u32| ((value >> shift) & 0xff) as i32;
@@ -403,7 +402,19 @@ fn lexar_ram_apply(effect: &str, color: &str) -> Result<(), String> {
                 delta * delta
             }).sum::<i32>()
         }).map(|(index, _)| index).unwrap_or(0);
-        click(18_337_120 + nearest as i32 * 512)?;
+        let palette_id = 18_337_120 + nearest as i32 * 512;
+        if effect == "static" {
+            // Lexar's Synchronize flag does not mirror a static color reliably.
+            // Program all eight physical LED slots explicitly. Dynamic modes
+            // keep the original single-LED path that is known to work.
+            for led in 0..8 {
+                click(18_333_024 + led * 512)?;
+                click(palette_id)?;
+            }
+        } else {
+            click(18_333_024)?;
+            click(palette_id)?;
+        }
     }
     std::thread::sleep(std::time::Duration::from_millis(350));
     click(18_309_376)?;
