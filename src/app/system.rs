@@ -289,9 +289,16 @@ pub fn apply_lighting(action: &str) -> Result<String, String> {
         "ram" => lexar_ram_apply(effect, color)?,
         "gpu" => gpu_apply(effect, color)?,
         "all" => {
-            // RAM uses SMBus and must finish before OpenRGB takes the GPU path.
-            lexar_ram_apply(effect, color)?;
-            gpu_apply(effect, color)?;
+            // Always address both controllers. A delayed Lexar confirmation
+            // must not prevent the independent Zotac/OpenRGB command.
+            let ram = lexar_ram_apply(effect, color);
+            let gpu = gpu_apply(effect, color);
+            match (ram, gpu) {
+                (Ok(()), Ok(())) => (),
+                (Err(ram), Ok(())) => return Err(format!("GPU đã nhận lệnh; RAM: {ram}")),
+                (Ok(()), Err(gpu)) => return Err(format!("RAM đã nhận lệnh; GPU: {gpu}")),
+                (Err(ram), Err(gpu)) => return Err(format!("RAM: {ram}; GPU: {gpu}")),
+            }
         }
         _ => return Err("Thiết bị ánh sáng không hợp lệ".into()),
     }
@@ -404,22 +411,25 @@ fn lexar_ram_apply(effect: &str, color: &str) -> Result<(), String> {
         }).map(|(index, _)| index).unwrap_or(0);
         let palette_id = 18_337_120 + nearest as i32 * 512;
         if effect == "static" {
-            // Write LED 2..8 first and LED 1 last. LED 1 is Lexar's physical
-            // synchronization source, so changing other slots after it can
-            // leave the source at a different color than the followers.
-            for led in [1, 2, 3, 4, 5, 6, 7, 0] {
-                click(18_333_024 + led * 512)?;
+            let program_static = || -> Result<(), String> {
+                for led in [1, 2, 3, 4, 5, 6, 7, 0] {
+                    click(18_333_024 + led * 512)?;
+                    click(palette_id)?;
+                    std::thread::sleep(std::time::Duration::from_millis(45));
+                }
+                click(18_339_680)?;
+                std::thread::sleep(std::time::Duration::from_millis(100));
+                click(18_333_024)?;
                 click(palette_id)?;
-                std::thread::sleep(std::time::Duration::from_millis(45));
-            }
-            // Broadcast the final LED 1 value only after all slots agree.
-            click(18_339_680)?;
-            std::thread::sleep(std::time::Duration::from_millis(100));
-            // Enabling Sync reloads LED 1 inside Lexar's UI. Re-select and
-            // commit its color once more so one Kanali click is sufficient.
-            click(18_333_024)?;
-            click(palette_id)?;
-            std::thread::sleep(std::time::Duration::from_millis(80));
+                std::thread::sleep(std::time::Duration::from_millis(80));
+                Ok(())
+            };
+            // Lexar commits the mode on the first Apply and the synchronized
+            // color on the next one. Perform both phases for one Kanali click.
+            program_static()?;
+            click(18_309_376)?;
+            std::thread::sleep(std::time::Duration::from_millis(220));
+            program_static()?;
         } else {
             click(18_333_024)?;
             click(palette_id)?;
