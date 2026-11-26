@@ -279,6 +279,14 @@ fn control(sh: Arc<Shared>) {
                 let lighting = monitor.lighting.clone();
                 sh.with(|s| s.lighting = lighting);
             }
+            Some(action) if action.starts_with("lighting|") => {
+                let result = crate::system::apply_lighting(action);
+                monitor.refresh_lighting();
+                monitor.lighting.message =
+                    result.unwrap_or_else(|e| format!("Không áp dụng được hiệu ứng: {e}"));
+                let lighting = monitor.lighting.clone();
+                sh.with(|s| s.lighting = lighting);
+            }
             _ => {}
         }
         let due = last_check.map_or(true, |t| t.elapsed() > Duration::from_secs(6 * 3600));

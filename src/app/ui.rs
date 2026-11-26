@@ -166,6 +166,48 @@ fn primary_button(ui: &mut egui::Ui, text: &str) -> egui::Response {
     )
 }
 
+const RGB_PRESETS: [(&str, Color32); 5] = [
+    ("FF2D2D", Color32::from_rgb(255, 45, 45)),
+    ("F5F54C", Color32::from_rgb(245, 245, 76)),
+    ("34D399", Color32::from_rgb(52, 211, 153)),
+    ("22D3EE", Color32::from_rgb(34, 211, 238)),
+    ("3B82F6", Color32::from_rgb(59, 130, 246)),
+];
+
+fn effect_code(label: &str) -> &'static str {
+    match label {
+        "Tắt" => "off",
+        "Nhịp thở" => "breathing",
+        "Cầu vồng" => "rainbow",
+        _ => "static",
+    }
+}
+
+fn lighting_controls(ui: &mut egui::Ui, effect: &mut String, color: &mut usize) {
+    egui::ComboBox::from_id_salt(ui.next_auto_id())
+        .selected_text(effect.as_str())
+        .width(150.0)
+        .show_ui(ui, |ui| {
+            for name in ["Tắt", "Tĩnh", "Nhịp thở", "Cầu vồng"] {
+                ui.selectable_value(effect, name.into(), name);
+            }
+        });
+    ui.horizontal(|ui| {
+        for (i, (_, shade)) in RGB_PRESETS.iter().enumerate() {
+            let button = egui::Button::new("")
+                .fill(*shade)
+                .stroke(Stroke::new(if *color == i { 3.0_f32 } else { 1.0_f32 }, if *color == i { Color32::WHITE } else { BORDER }))
+                .min_size(vec2(30.0, 28.0));
+            if ui.add(button).clicked() { *color = i; }
+        }
+    });
+}
+
+fn lighting_command(target: &str, effect: &str, color: usize) {
+    let hex = RGB_PRESETS[color.min(RGB_PRESETS.len() - 1)].0;
+    config::send_command(&format!("lighting|{target}|{}|{hex}", effect_code(effect)));
+}
+
 fn info_row(ui: &mut egui::Ui, key: &str, value: &str) {
     ui.horizontal(|ui| {
         ui.label(RichText::new(key).color(DIM));
@@ -333,7 +375,12 @@ struct App {
     last_read: Instant,
     autostart: bool,
     notice: String,
-    confirm_takeover: bool,
+    ram_effect: String,
+    ram_color: usize,
+    gpu_effect: String,
+    gpu_color: usize,
+    sync_effect: String,
+    sync_color: usize,
     logo: Option<egui::TextureHandle>,
     scroll_top: bool,
 }
@@ -368,7 +415,12 @@ impl App {
             last_read: Instant::now(),
             autostart: autostart::is_enabled(),
             notice: String::new(),
-            confirm_takeover: false,
+            ram_effect: "Tĩnh".into(),
+            ram_color: 0,
+            gpu_effect: "Tĩnh".into(),
+            gpu_color: 0,
+            sync_effect: "Tĩnh".into(),
+            sync_color: 0,
             logo: None,
             scroll_top: true,
         }
@@ -576,104 +628,48 @@ impl App {
     fn lighting_page(&mut self, ui: &mut egui::Ui) {
         let l = self.state.lighting.clone();
         egui::Frame::none().fill(Color32::from_rgb(20,27,35)).stroke(Stroke::new(1.0_f32,ACCENT.gamma_multiply(0.45))).rounding(18.0).inner_margin(Margin::same(22.0)).show(ui,|ui|{
-            ui.label(RichText::new("LIGHTING BRIDGE").small().strong().color(ACCENT));
-            ui.label(RichText::new("Một nơi cho toàn bộ ánh sáng").size(28.0).strong());
-            ui.label(RichText::new("Nhận diện phần cứng, phát hiện xung đột và chuyển quyền điều khiển có kiểm soát.").color(DIM));
+            ui.label(RichText::new("KANALI LIGHTING").small().strong().color(ACCENT));
+            ui.label(RichText::new("Ánh sáng theo cách của bạn").size(28.0).strong());
+            ui.label(RichText::new("Điều khiển riêng RAM Lexar và Zotac GPU, hoặc đồng bộ cả hai từ một bảng màu.").color(DIM));
             ui.add_space(12.0);
-            pill(ui,if l.exclusive{GOOD}else{WARN},if l.exclusive{"Kanali đang giữ quyền"}else{"L-Connect đang giữ quyền"});
+            pill(ui,if !l.lconnect_running{GOOD}else{WARN},if !l.lconnect_running{"Kanali đang giữ quyền độc lập"}else{"Cần tắt L-Connect để tránh xung đột"});
         });
         ui.add_space(8.0);
-        ui.columns(2, |cols| {
-            card(&mut cols[0], |ui| {
-                title(ui, "RAM RGB");
-                ui.label(
-                    RichText::new(if l.ram.is_empty() {
-                        "Chưa nhận diện"
-                    } else {
-                        &l.ram
-                    })
-                    .size(17.0)
-                    .strong(),
-                );
-                ui.label(
-                    RichText::new("2 mô-đun DDR5 được phát hiện")
-                        .small()
-                        .color(DIM),
-                );
-            });
-            card(&mut cols[1], |ui| {
-                title(ui, "Card đồ họa");
-                ui.label(
-                    RichText::new(if l.gpu.is_empty() {
-                        "Chưa nhận diện"
-                    } else {
-                        &l.gpu
-                    })
-                    .size(17.0)
-                    .strong(),
-                );
-                ui.label(
-                    RichText::new("Điều khiển qua OpenRGB tích hợp")
-                        .small()
-                        .color(DIM),
-                );
-            });
+        card(ui, |ui| {
+            title(ui, "RAM Lexar RGB");
+            ui.label(RichText::new(if l.ram.is_empty(){"Chưa nhận diện"}else{&l.ram}).size(17.0).strong());
+            ui.label(RichText::new("Hai DIMM · ENE bridge chính hãng").small().color(DIM));
+            lighting_controls(ui, &mut self.ram_effect, &mut self.ram_color);
+            if primary_button(ui, "Áp dụng cho RAM").clicked() {
+                lighting_command("ram", &self.ram_effect, self.ram_color);
+            }
         });
         card(ui, |ui| {
-            title(ui, "Quyền điều khiển");
-            info_row(
-                ui,
-                "L-Connect 3",
-                if l.lconnect_running {
-                    "Đang chạy · có xung đột"
-                } else {
-                    "Đã nhả quyền"
-                },
-            );
-            info_row(
-                ui,
-                "OpenRGB bridge",
-                if l.openrgb_available {
-                    "Sẵn sàng"
-                } else {
-                    "Không tìm thấy"
-                },
-            );
-            ui.label(RichText::new(&l.message).color(if l.exclusive { GOOD } else { WARN }));
-            ui.add_space(8.0);
-            ui.horizontal(|ui| {
-                if ui.button("Quét lại").clicked() {
-                    config::send_command("lighting-scan");
-                }
-                if l.exclusive {
-                    if primary_button(ui, "Trả quyền cho L-Connect").clicked() {
-                        config::send_command("lighting-release");
-                    }
-                } else if primary_button(ui, "Tắt LED GPU + RAM").clicked() {
-                    self.confirm_takeover = true;
-                }
-            });
-            ui.label(RichText::new("Chỉ nhắm tới Zotac GPU và RAM Lexar; L-Connect được mở lại ngay để tiếp tục điều khiển quạt.").small().color(DIM));
+            title(ui, "Zotac GPU RGB");
+            ui.label(RichText::new(if l.gpu.is_empty(){"Chưa nhận diện"}else{&l.gpu}).size(17.0).strong());
+            ui.label(RichText::new("Chỉ nhắm controller ZOTAC · không chạm quạt").small().color(DIM));
+            lighting_controls(ui, &mut self.gpu_effect, &mut self.gpu_color);
+            if primary_button(ui, "Áp dụng cho GPU").clicked() {
+                lighting_command("gpu", &self.gpu_effect, self.gpu_color);
+            }
         });
-        if self.confirm_takeover {
-            egui::Window::new("Xác nhận chuyển quyền")
-                .collapsible(false)
-                .resizable(false)
-                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-                .show(ui.ctx(), |ui| {
-                    ui.label("Kanali chỉ gửi lệnh tắt LED tới Zotac GPU và RAM Lexar.");
-                    ui.label(RichText::new("L-Connect sẽ được khởi động lại ngay để giữ điều khiển quạt.").color(DIM));
-                    ui.horizontal(|ui| {
-                        if ui.button("Hủy").clicked() {
-                            self.confirm_takeover = false;
-                        }
-                        if primary_button(ui, "Xác nhận").clicked() {
-                            config::send_command("lighting-takeover");
-                            self.confirm_takeover = false;
-                        }
-                    });
-                });
-        }
+        card(ui, |ui| {
+            title(ui, "Đồng bộ chung");
+            ui.label(RichText::new("Một hiệu ứng, một màu cho RAM và GPU").color(DIM));
+            lighting_controls(ui, &mut self.sync_effect, &mut self.sync_color);
+            if primary_button(ui, "Đồng bộ RAM + GPU").clicked() {
+                lighting_command("all", &self.sync_effect, self.sync_color);
+            }
+        });
+        card(ui, |ui| {
+            title(ui, "Trạng thái điều khiển");
+            info_row(ui,"L-Connect 3",if l.lconnect_running{"Đang chạy · Kanali sẽ dừng khi áp dụng"}else{"Đã tắt · không xung đột"});
+            info_row(ui,"OpenRGB Zotac",if l.openrgb_available{"Sẵn sàng"}else{"Không tìm thấy"});
+            ui.label(RichText::new(&l.message).color(if !l.lconnect_running { GOOD } else { WARN }));
+            ui.add_space(8.0);
+            if ui.button("Quét lại thiết bị").clicked() { config::send_command("lighting-scan"); }
+            ui.label(RichText::new("Kanali không tự khởi động lại L-Connect. Mỗi thiết bị được điều khiển bằng backend riêng.").small().color(DIM));
+        });
     }
 
     fn status_card(&mut self, ui: &mut egui::Ui) {

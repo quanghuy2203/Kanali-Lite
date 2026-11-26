@@ -203,14 +203,7 @@ impl Empty for String {
 }
 
 pub fn take_over_and_off() -> Result<String, String> {
-    let watcher_was_running = service_running("LConnectServiceWatcher");
-    let service_was_running = service_running("LConnectService");
-    if watcher_was_running {
-        sc("stop", "LConnectServiceWatcher")?;
-    }
-    if service_was_running {
-        sc("stop", "LConnectService")?;
-    }
+    stop_lconnect()?;
     let _ = Command::new("taskkill.exe")
         .args(["/IM", "OpenRGB.exe", "/F"])
         .creation_flags(HIDDEN)
@@ -242,21 +235,12 @@ pub fn take_over_and_off() -> Result<String, String> {
     }
     let _ = child.kill();
 
-    // Apply the DIMM command while L-Connect/OpenRGB are still stopped.  Both
-    // backends touch SMBus; restarting L-Connect first can reclaim the bus and
-    // make Lexar's Apply silently do nothing.
+    // Apply the DIMM command while L-Connect/OpenRGB remain stopped.
     let ram = lexar_ram_off();
-    if service_was_running {
-        let _ = sc("start", "LConnectService");
-    }
-    if watcher_was_running {
-        let _ = sc("start", "LConnectServiceWatcher");
-    }
 
     match (gpu_ok, ram) {
         (true, Ok(())) => Ok(
-            "Đã tắt LED Zotac GPU và gửi lệnh tắt RAM Lexar; L-Connect đã được mở lại cho quạt"
-                .into(),
+            "Đã tắt LED Zotac GPU và RAM Lexar; L-Connect vẫn được giữ ở trạng thái tắt".into(),
         ),
         (true, Err(e)) => Err(format!("GPU đã tắt, RAM Lexar chưa tắt: {e}")),
         (false, Ok(())) => Err("RAM đã nhận lệnh, nhưng OpenRGB không tìm thấy Zotac GPU".into()),
@@ -264,7 +248,59 @@ pub fn take_over_and_off() -> Result<String, String> {
     }
 }
 
+fn stop_lconnect() -> Result<(), String> {
+    if service_running("LConnectServiceWatcher") { sc("stop", "LConnectServiceWatcher")?; }
+    if service_running("LConnectService") { sc("stop", "LConnectService")?; }
+    let _ = Command::new("taskkill.exe").args(["/IM", "L-Connect 3.exe", "/F"])
+        .creation_flags(HIDDEN).output();
+    Ok(())
+}
+
+fn gpu_apply(effect: &str, color: &str) -> Result<(), String> {
+    if !std::path::Path::new(OPENRGB).is_file() { return Err("Không tìm thấy OpenRGB của L-Connect".into()); }
+    let _ = Command::new("taskkill.exe").args(["/IM", "OpenRGB.exe", "/F"])
+        .creation_flags(HIDDEN).output();
+    let (mode, shade) = match effect {
+        "off" => ("Static", "000000"),
+        "breathing" => ("Breathing", color),
+        "rainbow" => ("Rainbow", color),
+        _ => ("Static", color),
+    };
+    let status = Command::new(OPENRGB).args([
+        "--noautoconnect", "--device", "ZOTAC", "--mode", mode,
+        "--color", shade, "--brightness", if effect == "off" { "0" } else { "100" },
+    ]).creation_flags(HIDDEN).status().map_err(|e| format!("Không mở được OpenRGB: {e}"))?;
+    if status.success() { Ok(()) } else { Err(format!("Zotac GPU không hỗ trợ chế độ {mode}")) }
+}
+
+pub fn apply_lighting(action: &str) -> Result<String, String> {
+    let fields: Vec<&str> = action.split('|').collect();
+    if fields.len() != 4 || fields[0] != "lighting" { return Err("Lệnh ánh sáng không hợp lệ".into()); }
+    let (target, effect, color) = (fields[1], fields[2], fields[3]);
+    if !matches!(effect, "off" | "static" | "breathing" | "rainbow")
+        || color.len() != 6 || !color.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err("Hiệu ứng hoặc màu không hợp lệ".into());
+    }
+    stop_lconnect()?;
+    match target {
+        "ram" => lexar_ram_apply(effect, color)?,
+        "gpu" => gpu_apply(effect, color)?,
+        "all" => {
+            // RAM uses SMBus and must finish before OpenRGB takes the GPU path.
+            lexar_ram_apply(effect, color)?;
+            gpu_apply(effect, color)?;
+        }
+        _ => return Err("Thiết bị ánh sáng không hợp lệ".into()),
+    }
+    let label = match effect { "off" => "Tắt", "breathing" => "Nhịp thở", "rainbow" => "Cầu vồng", _ => "Tĩnh" };
+    Ok(format!("Đã áp dụng {label} cho {} · L-Connect vẫn tắt", match target { "ram" => "RAM", "gpu" => "GPU", _ => "RAM + GPU" }))
+}
+
 fn lexar_ram_off() -> Result<(), String> {
+    lexar_ram_apply("off", "FF2D2D")
+}
+
+fn lexar_ram_apply(effect: &str, color: &str) -> Result<(), String> {
     let bridge = ensure_lexar_bridge()?;
     let config =
         std::path::PathBuf::from(std::env::var_os("APPDATA").ok_or("Không tìm thấy APPDATA")?)
@@ -342,19 +378,43 @@ fn lexar_ram_off() -> Result<(), String> {
         unsafe { SendMessageW(button, BM_CLICK, WPARAM(0), LPARAM(0)) };
         Ok(())
     };
-    click(18_310_624)?; // LED OFF
+    if effect == "off" {
+        click(18_310_624)?; // LED OFF
+    } else {
+        let mode_id = match effect {
+            "breathing" => 18_324_272,
+            "rainbow" => 18_326_144,
+            _ => 18_323_648,
+        };
+        click(mode_id)?;
+        let palette = ["FF2D2D", "F5F54C", "34D399", "22D3EE", "3B82F6"];
+        let wanted = u32::from_str_radix(color, 16).unwrap_or(0);
+        let channel = |v: u32, shift: u32| ((v >> shift) & 0xff) as i32;
+        let nearest = palette.iter().enumerate().min_by_key(|(_, candidate)| {
+            let value = u32::from_str_radix(candidate, 16).unwrap_or(0);
+            [16, 8, 0].into_iter().map(|s| {
+                let d = channel(wanted, s) - channel(value, s); d * d
+            }).sum::<i32>()
+        }).map(|(i, _)| i).unwrap_or(0);
+        click(18_337_120 + nearest as i32 * 512)?;
+    }
     std::thread::sleep(std::time::Duration::from_millis(350));
     click(18_309_376)?; // Apply
     std::thread::sleep(std::time::Duration::from_secs(2));
+    let expected = if effect == "off" { "led_sw=0" } else { "led_sw=1" };
     let applied = std::fs::read_to_string(&config)
         .unwrap_or_default()
         .lines()
-        .any(|l| l == "led_sw=0");
+        .any(|l| l == expected);
     let _ = unsafe { PostMessageW(window, WM_CLOSE, WPARAM(0), LPARAM(0)) };
+    for name in ["Gaming.exe", "hid.exe"] {
+        let _ = Command::new("taskkill.exe").args(["/IM", name, "/F"])
+            .creation_flags(HIDDEN).output();
+    }
     if applied {
         Ok(())
     } else {
-        Err("Lexar RGB Sync không xác nhận trạng thái LED OFF".into())
+        Err("Bridge Lexar không xác nhận hiệu ứng đã chọn".into())
     }
 }
 
@@ -471,5 +531,24 @@ mod rgb_tests {
     #[ignore = "changes the physical Lexar DIMM lighting"]
     fn lexar_bridge_turns_off_detected_dimms() {
         super::lexar_ram_off().expect("Lexar RAM bridge failed");
+    }
+
+    #[test]
+    #[ignore = "changes the physical Lexar DIMM lighting"]
+    fn lexar_bridge_applies_breathing() {
+        super::lexar_ram_apply("breathing", "34D399").expect("Lexar effect failed");
+    }
+
+    #[test]
+    #[ignore = "changes the physical Zotac GPU lighting"]
+    fn zotac_bridge_applies_static() {
+        super::gpu_apply("static", "22D3EE").expect("Zotac effect failed");
+    }
+
+    #[test]
+    #[ignore = "changes both physical lighting controllers"]
+    fn synchronized_command_applies_to_ram_and_gpu() {
+        super::lexar_ram_apply("static", "F5F54C").expect("RAM sync effect failed");
+        super::gpu_apply("static", "F5F54C").expect("GPU sync effect failed");
     }
 }
