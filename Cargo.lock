@@ -1843,7 +1843,7 @@ dependencies = [
 
 [[package]]
 name = "kanali-rs"
-version = "0.2.37"
+version = "0.2.38"
 dependencies = [
  "eframe",
  "image",

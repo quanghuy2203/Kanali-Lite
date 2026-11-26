@@ -404,21 +404,17 @@ fn lexar_ram_apply(effect: &str, color: &str) -> Result<(), String> {
         }).map(|(index, _)| index).unwrap_or(0);
         let palette_id = 18_337_120 + nearest as i32 * 512;
         if effect == "static" {
-            // Re-arm "Sync to LED 1". Its saved Synchronize=1 flag can remain
-            // set while the hardware mirror is no longer active. Toggling it
-            // off/on restores the physical broadcast without changing modes.
-            click(18_339_680)?;
-            std::thread::sleep(std::time::Duration::from_millis(80));
-            click(18_339_680)?;
-            std::thread::sleep(std::time::Duration::from_millis(80));
-            // Also write every LED slot explicitly. The small pause is needed
-            // by Lexar's owner-drawn MFC controls; back-to-back BM_CLICK events
-            // otherwise leave only LED 1 committed.
-            for led in 0..8 {
+            // Write LED 2..8 first and LED 1 last. LED 1 is Lexar's physical
+            // synchronization source, so changing other slots after it can
+            // leave the source at a different color than the followers.
+            for led in [1, 2, 3, 4, 5, 6, 7, 0] {
                 click(18_333_024 + led * 512)?;
                 click(palette_id)?;
-                std::thread::sleep(std::time::Duration::from_millis(35));
+                std::thread::sleep(std::time::Duration::from_millis(45));
             }
+            // Broadcast the final LED 1 value only after all slots agree.
+            click(18_339_680)?;
+            std::thread::sleep(std::time::Duration::from_millis(100));
         } else {
             click(18_333_024)?;
             click(palette_id)?;
