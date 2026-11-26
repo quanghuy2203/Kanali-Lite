@@ -258,8 +258,6 @@ fn stop_lconnect() -> Result<(), String> {
 
 fn gpu_apply(effect: &str, color: &str) -> Result<(), String> {
     if !std::path::Path::new(OPENRGB).is_file() { return Err("Không tìm thấy OpenRGB của L-Connect".into()); }
-    let _ = Command::new("taskkill.exe").args(["/IM", "OpenRGB.exe", "/F"])
-        .creation_flags(HIDDEN).output();
     let (mode, shade) = match effect {
         "off" => ("Static", "000000"),
         "breathing" => ("Breath", color),
@@ -268,8 +266,27 @@ fn gpu_apply(effect: &str, color: &str) -> Result<(), String> {
         "rainbow" => ("Fade", color),
         _ => ("Static", color),
     };
+    // Keep one OpenRGB SDK server alive. A short-lived client can then update
+    // the GPU without performing a fresh hardware/SMBus scan on every click.
+    if std::net::TcpStream::connect_timeout(
+        &"127.0.0.1:6742".parse().unwrap(),
+        std::time::Duration::from_millis(80),
+    ).is_err() {
+        Command::new(OPENRGB)
+            .args(["--server", "--server-host", "127.0.0.1", "--server-port", "6742", "--noautoconnect"])
+            .creation_flags(HIDDEN)
+            .spawn()
+            .map_err(|e| format!("Không khởi động được OpenRGB bridge: {e}"))?;
+        let started = std::time::Instant::now();
+        while std::net::TcpStream::connect("127.0.0.1:6742").is_err() {
+            if started.elapsed() > std::time::Duration::from_secs(8) {
+                return Err("OpenRGB bridge khởi động quá lâu".into());
+            }
+            std::thread::sleep(std::time::Duration::from_millis(75));
+        }
+    }
     let status = Command::new(OPENRGB).args([
-        "--noautoconnect", "--device", "ZOTAC", "--mode", mode,
+        "--client", "127.0.0.1:6742", "--device", "ZOTAC", "--mode", mode,
         "--color", shade, "--brightness", if effect == "off" { "0" } else { "100" },
         "--speed", "20",
     ]).creation_flags(HIDDEN).status().map_err(|e| format!("Không mở được OpenRGB: {e}"))?;
@@ -291,6 +308,8 @@ pub fn apply_lighting(action: &str) -> Result<String, String> {
         "all" => {
             // Always address both controllers. A delayed Lexar confirmation
             // must not prevent the independent Zotac/OpenRGB command.
+            // Keep SMBus writers serialized. The persistent OpenRGB server
+            // makes the GPU phase quick without racing Lexar for the bus.
             let ram = lexar_ram_apply(effect, color);
             let gpu = gpu_apply(effect, color);
             match (ram, gpu) {

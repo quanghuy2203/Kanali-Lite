@@ -245,7 +245,9 @@ fn control(sh: Arc<Shared>) {
     let mut last_lighting = Instant::now() - Duration::from_secs(30);
     let mut monitor = crate::system::Monitor::new();
     loop {
-        thread::sleep(Duration::from_millis(500));
+        // Lighting commands should feel immediate; the old 500 ms poll added
+        // visible latency before either hardware bridge even started working.
+        thread::sleep(Duration::from_millis(100));
         match config::take_command().as_deref() {
             Some("check") => {
                 last_check = Some(Instant::now());
