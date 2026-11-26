@@ -433,7 +433,9 @@ fn lexar_ram_apply(effect: &str, color: &str) -> Result<(), String> {
     // not program SMBus by itself: the real Apply control must be invoked.
     // Without this, the UI displays the requested color but the DIMMs keep the
     // previous hardware state.
-    let apply = unsafe { GetDlgItem(window, 18_309_376) }
+    // Verified against Lexar RGB Sync v1.00.02. 18_309_376 belongs to an
+    // unrelated top-row control; Apply is the bottom-right control below.
+    let apply = unsafe { GetDlgItem(window, 18_340_928) }
         .map_err(|_| "Bridge Lexar thiếu nút Apply")?;
     unsafe { SendMessageW(apply, BM_CLICK, WPARAM(0), LPARAM(0)); }
     std::thread::sleep(std::time::Duration::from_millis(450));
