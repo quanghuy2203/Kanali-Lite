@@ -415,6 +415,11 @@ fn lexar_ram_apply(effect: &str, color: &str) -> Result<(), String> {
             // Broadcast the final LED 1 value only after all slots agree.
             click(18_339_680)?;
             std::thread::sleep(std::time::Duration::from_millis(100));
+            // Enabling Sync reloads LED 1 inside Lexar's UI. Re-select and
+            // commit its color once more so one Kanali click is sufficient.
+            click(18_333_024)?;
+            click(palette_id)?;
+            std::thread::sleep(std::time::Duration::from_millis(80));
         } else {
             click(18_333_024)?;
             click(palette_id)?;
