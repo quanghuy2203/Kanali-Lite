@@ -203,6 +203,21 @@ fn lighting_controls(ui: &mut egui::Ui, effect: &mut String, color: &mut usize) 
     });
 }
 
+fn synchronized_controls(ui: &mut egui::Ui, effect: &mut String, color: &mut usize) {
+    egui::ComboBox::from_id_salt(ui.next_auto_id())
+        .selected_text(effect.as_str()).width(150.0).show_ui(ui, |ui| {
+            for name in ["Tắt", "Tĩnh"] { ui.selectable_value(effect, name.into(), name); }
+        });
+    ui.horizontal(|ui| {
+        for (i, (_, shade)) in RGB_PRESETS.iter().enumerate() {
+            let button = egui::Button::new("").fill(*shade)
+                .stroke(Stroke::new(if *color == i { 3.0_f32 } else { 1.0_f32 }, if *color == i { Color32::WHITE } else { BORDER }))
+                .min_size(vec2(30.0, 28.0));
+            if ui.add(button).clicked() { *color = i; }
+        }
+    });
+}
+
 fn lighting_command(target: &str, effect: &str, color: usize) {
     let hex = RGB_PRESETS[color.min(RGB_PRESETS.len() - 1)].0;
     config::send_command(&format!("lighting|{target}|{}|{hex}", effect_code(effect)));
@@ -655,11 +670,12 @@ impl App {
         });
         card(ui, |ui| {
             title(ui, "Đồng bộ chung");
-            ui.label(RichText::new("Một hiệu ứng, một màu cho RAM và GPU").color(DIM));
-            lighting_controls(ui, &mut self.sync_effect, &mut self.sync_color);
+            ui.label(RichText::new("Đồng bộ chính xác trạng thái và màu cho RAM + GPU").color(DIM));
+            synchronized_controls(ui, &mut self.sync_effect, &mut self.sync_color);
             if primary_button(ui, "Đồng bộ RAM + GPU").clicked() {
                 lighting_command("all", &self.sync_effect, self.sync_color);
             }
+            ui.label(RichText::new("Hiệu ứng động chạy trên hai chip phần cứng độc lập nên chỉ có ở phần điều khiển riêng.").small().color(DIM));
         });
         card(ui, |ui| {
             title(ui, "Trạng thái điều khiển");

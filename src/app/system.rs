@@ -262,13 +262,16 @@ fn gpu_apply(effect: &str, color: &str) -> Result<(), String> {
         .creation_flags(HIDDEN).output();
     let (mode, shade) = match effect {
         "off" => ("Static", "000000"),
-        "breathing" => ("Breathing", color),
-        "rainbow" => ("Rainbow", color),
+        "breathing" => ("Breath", color),
+        // Fade is a full-spectrum color transition. Zotac's Rainbow moves
+        // colors between zones and becomes a rapid flash on this one-zone GPU.
+        "rainbow" => ("Fade", color),
         _ => ("Static", color),
     };
     let status = Command::new(OPENRGB).args([
         "--noautoconnect", "--device", "ZOTAC", "--mode", mode,
         "--color", shade, "--brightness", if effect == "off" { "0" } else { "100" },
+        "--speed", "20",
     ]).creation_flags(HIDDEN).status().map_err(|e| format!("Không mở được OpenRGB: {e}"))?;
     if status.success() { Ok(()) } else { Err(format!("Zotac GPU không hỗ trợ chế độ {mode}")) }
 }
@@ -300,31 +303,75 @@ fn lexar_ram_off() -> Result<(), String> {
     lexar_ram_apply("off", "FF0000")
 }
 
+fn ram_effect_packet(effect: &str, color: &str) -> Result<String, String> {
+    let mode = match effect { "breathing" => 2u32, "rainbow" => 5, _ => 1 };
+    let rgb = u32::from_str_radix(color, 16).map_err(|_| "Màu RAM không hợp lệ")?;
+    let (r, g, b) = (((rgb >> 16) & 0xff) as u8, ((rgb >> 8) & 0xff) as u8, (rgb & 0xff) as u8);
+    let mut bytes = Vec::with_capacity(57);
+    bytes.extend_from_slice(&mode.to_le_bytes());
+    bytes.extend_from_slice(&1u32.to_le_bytes());
+    bytes.extend_from_slice(&8u32.to_le_bytes());
+    bytes.extend_from_slice(&0u32.to_le_bytes());
+    if effect == "rainbow" {
+        // Lexar's hardware rainbow expects one seed color per physical LED.
+        // A single repeated color makes only the first LED appear animated on
+        // this DDR5 controller.
+        for pixel in [
+            [0xFF, 0x00, 0x00, 0x00], [0xFF, 0xFF, 0x00, 0x00],
+            [0x00, 0xFF, 0x00, 0x00], [0x00, 0xFF, 0xFF, 0x00],
+            [0x00, 0x00, 0xFF, 0x00], [0xFF, 0x00, 0xFF, 0x00],
+            [0xFF, 0xFF, 0xFF, 0x00], [0x7D, 0x00, 0x7D, 0x00],
+        ] { bytes.extend_from_slice(&pixel); }
+    } else {
+        for _ in 0..8 { bytes.extend_from_slice(&[b, g, r, 0]); }
+    }
+    bytes.extend_from_slice(&0u32.to_le_bytes());
+    bytes.extend_from_slice(&0u32.to_le_bytes());
+    bytes.push(bytes.iter().fold(0u8, |sum, byte| sum.wrapping_add(*byte)));
+    Ok(bytes.iter().map(|byte| format!("{byte:02X}")).collect())
+}
+
+fn write_ram_profile(config: &str, effect: &str, color: &str) -> Result<String, String> {
+    let profile = config.lines().find_map(|line| line.strip_prefix("CurrentProfile="))
+        .unwrap_or("0");
+    let section = format!("[Profile{profile}Setting]");
+    let packet = ram_effect_packet(effect, color)?;
+    let mut active = false;
+    let mut changed = 0;
+    let mut out = Vec::new();
+    for line in config.lines() {
+        if line.starts_with('[') { active = line == section; }
+        let replacement = if line.starts_with("led_sw=") {
+            Some(format!("led_sw={}", if effect == "off" { 0 } else { 1 }))
+        } else if active && (line.starts_with("EffectInfo0=") || line.starts_with("EffectInfo1=")) {
+            changed += 1;
+            Some(format!("{}={packet}", line.split('=').next().unwrap_or("EffectInfo0")))
+        } else { None };
+        out.push(replacement.unwrap_or_else(|| line.to_owned()));
+    }
+    if changed != 2 { return Err("Không tìm thấy đủ hai DIMM trong profile Lexar".into()); }
+    Ok(out.join("\r\n") + "\r\n")
+}
+
 fn ram_effect_matches(config: &str, effect: &str, color: &str) -> bool {
-    let Some(value) = config.lines().find_map(|line| line.strip_prefix("EffectInfo0=")) else {
-        return false;
-    };
-    let mode = match effect { "breathing" => "02", "rainbow" => "05", _ => "01" };
-    if !value.starts_with(mode) { return false; }
-    if effect == "rainbow" { return true; }
-    if value.len() < 96 || color.len() != 6 { return false; }
-    let expected = format!("{}{}{}00", &color[4..6], &color[2..4], &color[0..2]);
-    (0..8).all(|led| {
-        let start = 32 + led * 8;
-        value[start..start + 8].eq_ignore_ascii_case(&expected)
-    })
+    let Ok(expected) = ram_effect_packet(effect, color) else { return false; };
+    let profile = config.lines().find_map(|line| line.strip_prefix("CurrentProfile="))
+        .unwrap_or("0");
+    let section = format!("[Profile{profile}Setting]");
+    let mut active = false;
+    let mut values = Vec::new();
+    for line in config.lines() {
+        if line.starts_with('[') { active = line == section; }
+        if active {
+            if let Some(value) = line.strip_prefix("EffectInfo0=") { values.push(value); }
+            if let Some(value) = line.strip_prefix("EffectInfo1=") { values.push(value); }
+        }
+    }
+    values.len() == 2 && values.into_iter().all(|value| value.eq_ignore_ascii_case(&expected))
 }
 
 fn lexar_ram_apply(effect: &str, color: &str) -> Result<(), String> {
-    use windows::{
-        core::HSTRING,
-        Win32::{
-            Foundation::{LPARAM, WPARAM},
-            UI::WindowsAndMessaging::{
-                FindWindowW, GetDlgItem, SendMessageW, ShowWindow, BM_CLICK, SW_HIDE,
-            },
-        },
-    };
+    use windows::{core::HSTRING, Win32::UI::WindowsAndMessaging::{FindWindowW, ShowWindow, SW_HIDE}};
     let bridge = ensure_lexar_bridge()?;
     let config =
         std::path::PathBuf::from(std::env::var_os("APPDATA").ok_or("Không tìm thấy APPDATA")?)
@@ -347,20 +394,22 @@ fn lexar_ram_apply(effect: &str, color: &str) -> Result<(), String> {
             std::thread::sleep(std::time::Duration::from_millis(100));
         }
     }
+    // Keep hid.exe warm but restart the lightweight UI loader so it rereads a
+    // complete packet for both DIMMs. This avoids a full SMBus reinitialization.
+    let _ = Command::new("taskkill.exe").args(["/IM", "Gaming.exe", "/F"])
+        .creation_flags(HIDDEN).output();
+    std::thread::sleep(std::time::Duration::from_millis(80));
     let text = std::fs::read_to_string(&config)
         .map_err(|e| format!("Bridge RAM chưa nhận được DIMM Lexar: {e}"))?;
     let backup = config.with_extension("kanali-backup");
     if !backup.exists() {
         std::fs::copy(&config, &backup).map_err(|e| e.to_string())?;
     }
+    let updated = write_ram_profile(&text, effect, color)?;
+    std::fs::write(&config, updated).map_err(|e| e.to_string())?;
+    Command::new(&exe).current_dir(&bridge).creation_flags(HIDDEN)
+        .spawn().map_err(|e| e.to_string())?;
     let title = HSTRING::from("Lexar RGB Sync_Config");
-    if unsafe { FindWindowW(None, &title) }.is_err() {
-        Command::new(&exe)
-            .current_dir(&bridge)
-            .creation_flags(HIDDEN)
-            .spawn()
-            .map_err(|e| e.to_string())?;
-    }
     let started = std::time::Instant::now();
     let window = loop {
         if let Ok(hwnd) = unsafe { FindWindowW(None, &title) } {
@@ -371,65 +420,12 @@ fn lexar_ram_apply(effect: &str, color: &str) -> Result<(), String> {
         }
         std::thread::sleep(std::time::Duration::from_millis(150));
     };
-    // Invoke the real Win32 controls by stable ID.  Unlike mouse injection,
-    // this works while the bridge is hidden/backgrounded and is DPI-safe.
-    let click = |id: i32| -> Result<(), String> {
-        let button = unsafe { GetDlgItem(window, id) }
-            .map_err(|_| format!("Bridge RAM thiếu nút điều khiển {id}"))?;
-        unsafe { SendMessageW(button, BM_CLICK, WPARAM(0), LPARAM(0)) };
-        Ok(())
-    };
-    let is_off = text.lines().any(|line| line == "led_sw=0");
-    if effect == "off" {
-        if !is_off { click(18_310_624)?; }
-    } else {
-        if is_off {
-            click(18_310_624)?; // LED ON (same toggle control)
-            std::thread::sleep(std::time::Duration::from_millis(250));
-        }
-        let mode_id = match effect {
-            "breathing" => 18_324_272,
-            "rainbow" => 18_326_144,
-            _ => 18_323_648,
-        };
-        click(mode_id)?;
-        let palette = ["FF0000", "FFFF00", "00FF00", "00FFFF", "0000FF"];
-        let wanted = u32::from_str_radix(color, 16).unwrap_or(0);
-        let channel = |v: u32, shift: u32| ((v >> shift) & 0xff) as i32;
-        let nearest = palette.iter().enumerate().min_by_key(|(_, candidate)| {
-            let value = u32::from_str_radix(candidate, 16).unwrap_or(0);
-            [16, 8, 0].into_iter().map(|s| {
-                let d = channel(wanted, s) - channel(value, s); d * d
-            }).sum::<i32>()
-        }).map(|(i, _)| i).unwrap_or(0);
-        let palette_id = 18_337_120 + nearest as i32 * 512;
-        // Lexar's Synchronize flag does not mirror static colors reliably.
-        // Assign the selected palette color to every physical LED explicitly.
-        for led in 0..8 {
-            click(18_333_024 + led * 512)?;
-            click(palette_id)?;
-        }
-    }
-    std::thread::sleep(std::time::Duration::from_millis(60));
-    click(18_309_376)?; // Apply
-    let expected = if effect == "off" { "led_sw=0" } else { "led_sw=1" };
-    let started = std::time::Instant::now();
-    let applied = loop {
-        let committed = std::fs::read_to_string(&config).unwrap_or_default();
-        let matched = committed.lines().any(|l| l == expected)
-            && (effect == "off" || ram_effect_matches(&committed, effect, color));
-        if matched { break true; }
-        if started.elapsed() >= std::time::Duration::from_millis(1200) { break false; }
-        std::thread::sleep(std::time::Duration::from_millis(50));
-    };
-    // Keep the signed bridge warm and hidden. The first command initializes
-    // SMBus; following changes reuse the same session instead of taking ~5 s.
     unsafe { let _ = ShowWindow(window, SW_HIDE); }
-    if applied {
-        Ok(())
-    } else {
-        Err("Bridge Lexar không xác nhận đúng màu/hiệu ứng đã chọn".into())
-    }
+    let committed = std::fs::read_to_string(&config).unwrap_or_default();
+    let expected = if effect == "off" { "led_sw=0" } else { "led_sw=1" };
+    if committed.lines().any(|line| line == expected)
+        && (effect == "off" || ram_effect_matches(&committed, effect, color)) { Ok(()) }
+    else { Err("Bridge Lexar không giữ đúng packet cho cả hai DIMM".into()) }
 }
 
 fn copy_tree(from: &std::path::Path, to: &std::path::Path) -> Result<(), String> {
@@ -568,9 +564,21 @@ mod rgb_tests {
 
     #[test]
     fn parses_confirmed_ram_effect() {
-        let sample = "EffectInfo0=0200000001000000080000000000000000FF000000FF000000FF000000FF000000FF000000FF000000FF000000FF00000000000000000000F8";
-        assert!(super::ram_effect_matches(sample, "breathing", "00FF00"));
-        assert!(!super::ram_effect_matches(sample, "static", "00FF00"));
-        assert!(!super::ram_effect_matches(sample, "breathing", "FF0000"));
+        let packet = super::ram_effect_packet("breathing", "00FF00").unwrap();
+        let sample = format!("CurrentProfile=0\n[Profile0Setting]\nEffectInfo0={packet}\nEffectInfo1={packet}");
+        assert!(super::ram_effect_matches(&sample, "breathing", "00FF00"));
+        assert!(!super::ram_effect_matches(&sample, "static", "00FF00"));
+        assert!(!super::ram_effect_matches(&sample, "breathing", "FF0000"));
+    }
+
+    #[test]
+    fn writes_both_dimms_in_active_profile() {
+        let input = "CurrentProfile=0\nled_sw=0\n[Profile0Setting]\nDevNum=2\nEffectInfo0=OLD\nEffectInfo1=OLD\n[Profile1Setting]\nEffectInfo0=KEEP\nEffectInfo1=KEEP\n";
+        let output = super::write_ram_profile(input, "static", "FF0000").unwrap();
+        assert!(output.contains("led_sw=1"));
+        assert_eq!(output.matches("EffectInfo0=01000000").count(), 1);
+        assert_eq!(output.matches("EffectInfo1=01000000").count(), 1);
+        assert!(output.contains("EffectInfo0=KEEP"));
+        assert!(super::ram_effect_matches(&output, "static", "FF0000"));
     }
 }
