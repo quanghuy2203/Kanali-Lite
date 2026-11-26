@@ -429,6 +429,10 @@ fn lexar_ram_apply(effect: &str, color: &str) -> Result<(), String> {
         std::thread::sleep(std::time::Duration::from_millis(10));
     };
     unsafe { let _ = ShowWindow(window, SW_HIDE); }
+    // The MFC window is created well before hid.exe finishes enumerating the
+    // DIMMs and opening the SMBus driver. Applying during that interval is a
+    // no-op even though the configurator already shows the new colors.
+    std::thread::sleep(std::time::Duration::from_millis(2_200));
     // Gaming.exe is only Kanali's hidden vendor bridge. Loading a profile does
     // not program SMBus by itself: the real Apply control must be invoked.
     // Without this, the UI displays the requested color but the DIMMs keep the
@@ -438,7 +442,10 @@ fn lexar_ram_apply(effect: &str, color: &str) -> Result<(), String> {
     let apply = unsafe { GetDlgItem(window, 18_340_928) }
         .map_err(|_| "Bridge Lexar thiếu nút Apply")?;
     unsafe { SendMessageW(apply, BM_CLICK, WPARAM(0), LPARAM(0)); }
-    std::thread::sleep(std::time::Duration::from_millis(450));
+    // Do not terminate Gaming.exe while hid.exe is still committing the two
+    // eight-LED packets. The vendor UI normally needs roughly three seconds
+    // from launch to a completed physical change on this controller.
+    std::thread::sleep(std::time::Duration::from_millis(1_500));
     unsafe { let _ = ShowWindow(window, SW_HIDE); }
     // The visible configurator is not needed after Apply. Keep only hid.exe,
     // which owns the signed SMBus connection, warm in Kanali's background.
