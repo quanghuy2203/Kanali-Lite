@@ -307,9 +307,12 @@ fn ram_effect_matches(config: &str, effect: &str, color: &str) -> bool {
     let mode = match effect { "breathing" => "02", "rainbow" => "05", _ => "01" };
     if !value.starts_with(mode) { return false; }
     if effect == "rainbow" { return true; }
-    if value.len() < 40 || color.len() != 6 { return false; }
+    if value.len() < 96 || color.len() != 6 { return false; }
     let expected = format!("{}{}{}00", &color[4..6], &color[2..4], &color[0..2]);
-    value[32..40].eq_ignore_ascii_case(&expected)
+    (0..8).all(|led| {
+        let start = 32 + led * 8;
+        value[start..start + 8].eq_ignore_ascii_case(&expected)
+    })
 }
 
 fn lexar_ram_apply(effect: &str, color: &str) -> Result<(), String> {
@@ -390,9 +393,6 @@ fn lexar_ram_apply(effect: &str, color: &str) -> Result<(), String> {
             _ => 18_323_648,
         };
         click(mode_id)?;
-        // Choose LED 1 before selecting a palette color. Synchronize=1 mirrors
-        // LED 1 to all eight LEDs on both detected DIMMs.
-        click(18_333_024)?;
         let palette = ["FF0000", "FFFF00", "00FF00", "00FFFF", "0000FF"];
         let wanted = u32::from_str_radix(color, 16).unwrap_or(0);
         let channel = |v: u32, shift: u32| ((v >> shift) & 0xff) as i32;
@@ -402,15 +402,26 @@ fn lexar_ram_apply(effect: &str, color: &str) -> Result<(), String> {
                 let d = channel(wanted, s) - channel(value, s); d * d
             }).sum::<i32>()
         }).map(|(i, _)| i).unwrap_or(0);
-        click(18_337_120 + nearest as i32 * 512)?;
+        let palette_id = 18_337_120 + nearest as i32 * 512;
+        // Lexar's Synchronize flag does not mirror static colors reliably.
+        // Assign the selected palette color to every physical LED explicitly.
+        for led in 0..8 {
+            click(18_333_024 + led * 512)?;
+            click(palette_id)?;
+        }
     }
-    std::thread::sleep(std::time::Duration::from_millis(350));
+    std::thread::sleep(std::time::Duration::from_millis(60));
     click(18_309_376)?; // Apply
-    std::thread::sleep(std::time::Duration::from_secs(2));
-    let committed = std::fs::read_to_string(&config).unwrap_or_default();
     let expected = if effect == "off" { "led_sw=0" } else { "led_sw=1" };
-    let applied = committed.lines().any(|l| l == expected)
-        && (effect == "off" || ram_effect_matches(&committed, effect, color));
+    let started = std::time::Instant::now();
+    let applied = loop {
+        let committed = std::fs::read_to_string(&config).unwrap_or_default();
+        let matched = committed.lines().any(|l| l == expected)
+            && (effect == "off" || ram_effect_matches(&committed, effect, color));
+        if matched { break true; }
+        if started.elapsed() >= std::time::Duration::from_millis(1200) { break false; }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    };
     // Keep the signed bridge warm and hidden. The first command initializes
     // SMBus; following changes reuse the same session instead of taking ~5 s.
     unsafe { let _ = ShowWindow(window, SW_HIDE); }
