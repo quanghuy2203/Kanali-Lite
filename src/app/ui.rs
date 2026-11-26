@@ -167,11 +167,11 @@ fn primary_button(ui: &mut egui::Ui, text: &str) -> egui::Response {
 }
 
 const RGB_PRESETS: [(&str, Color32); 5] = [
-    ("FF2D2D", Color32::from_rgb(255, 45, 45)),
-    ("F5F54C", Color32::from_rgb(245, 245, 76)),
-    ("34D399", Color32::from_rgb(52, 211, 153)),
-    ("22D3EE", Color32::from_rgb(34, 211, 238)),
-    ("3B82F6", Color32::from_rgb(59, 130, 246)),
+    ("FF0000", Color32::from_rgb(255, 0, 0)),
+    ("FFFF00", Color32::from_rgb(255, 255, 0)),
+    ("00FF00", Color32::from_rgb(0, 255, 0)),
+    ("00FFFF", Color32::from_rgb(0, 255, 255)),
+    ("0000FF", Color32::from_rgb(0, 0, 255)),
 ];
 
 fn effect_code(label: &str) -> &'static str {
