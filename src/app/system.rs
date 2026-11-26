@@ -404,21 +404,29 @@ fn lexar_ram_apply(effect: &str, color: &str) -> Result<(), String> {
         }).map(|(index, _)| index).unwrap_or(0);
         let palette_id = 18_337_120 + nearest as i32 * 512;
         if effect == "static" {
-            // Lexar's Synchronize flag does not mirror a static color reliably.
-            // Program all eight physical LED slots explicitly. Dynamic modes
-            // keep the original single-LED path that is known to work.
+            // Re-arm "Sync to LED 1". Its saved Synchronize=1 flag can remain
+            // set while the hardware mirror is no longer active. Toggling it
+            // off/on restores the physical broadcast without changing modes.
+            click(18_339_680)?;
+            std::thread::sleep(std::time::Duration::from_millis(80));
+            click(18_339_680)?;
+            std::thread::sleep(std::time::Duration::from_millis(80));
+            // Also write every LED slot explicitly. The small pause is needed
+            // by Lexar's owner-drawn MFC controls; back-to-back BM_CLICK events
+            // otherwise leave only LED 1 committed.
             for led in 0..8 {
                 click(18_333_024 + led * 512)?;
                 click(palette_id)?;
+                std::thread::sleep(std::time::Duration::from_millis(35));
             }
         } else {
             click(18_333_024)?;
             click(palette_id)?;
         }
     }
-    std::thread::sleep(std::time::Duration::from_millis(350));
+    std::thread::sleep(std::time::Duration::from_millis(120));
     click(18_309_376)?;
-    std::thread::sleep(std::time::Duration::from_secs(2));
+    std::thread::sleep(std::time::Duration::from_millis(450));
     unsafe { let _ = ShowWindow(window, SW_HIDE); }
     let committed = std::fs::read_to_string(&config).unwrap_or_default();
     let expected = if effect == "off" { "led_sw=0" } else { "led_sw=1" };
