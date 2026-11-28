@@ -348,6 +348,14 @@ fn ram_effect_matches(config: &str, effect: &str, color: &str) -> bool {
     value[32..40].eq_ignore_ascii_case(&expected)
 }
 
+fn lexar_led_sync_enabled(config: &str) -> bool {
+    config
+        .lines()
+        .rev()
+        .find_map(|line| line.strip_prefix("Synchronize="))
+        == Some("1")
+}
+
 fn lexar_ram_apply(effect: &str, color: &str) -> Result<(), String> {
     use windows::{
         core::HSTRING,
@@ -404,6 +412,21 @@ fn lexar_ram_apply(effect: &str, color: &str) -> Result<(), String> {
         }
         std::thread::sleep(std::time::Duration::from_millis(150));
     };
+    // The top-level window appears before Lexar finishes creating its child
+    // controls. Wait only on a cold bridge start; a resident bridge passes
+    // this check immediately.
+    let controls_started = std::time::Instant::now();
+    loop {
+        let power_ready = unsafe { GetDlgItem(window, 18_310_624) }.is_ok();
+        let apply_ready = unsafe { GetDlgItem(window, 18_309_376) }.is_ok();
+        if power_ready && apply_ready {
+            break;
+        }
+        if controls_started.elapsed() > std::time::Duration::from_secs(5) {
+            return Err("Bridge Lexar mở cửa sổ nhưng chưa tạo xong nút điều khiển".into());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
     // Restore the original v0.2.29 path that was confirmed on this hardware:
     // drive Lexar's real controls and let its resident bridge program SMBus.
     let click = |id: i32| -> Result<(), String> {
@@ -445,36 +468,22 @@ fn lexar_ram_apply(effect: &str, color: &str) -> Result<(), String> {
         }).map(|(index, _)| index).unwrap_or(0);
         let palette_id = 18_337_120 + nearest as i32 * 512;
         if effect == "static" {
-            let program_static = || -> Result<(), String> {
-                for led in [1, 2, 3, 4, 5, 6, 7, 0] {
-                    click(18_333_024 + led * 512)?;
-                    click(palette_id)?;
-                    std::thread::sleep(std::time::Duration::from_millis(45));
-                }
+            // The vendor profile already supports "Sync to LED 1". Program
+            // the master LED once and let the bridge fan it out in a single
+            // SMBus transaction instead of touching eight LEDs separately.
+            click(18_333_024)?;
+            click(palette_id)?;
+            if !lexar_led_sync_enabled(&text) {
                 click(18_339_680)?;
-                std::thread::sleep(std::time::Duration::from_millis(100));
-                click(18_333_024)?;
-                click(palette_id)?;
-                std::thread::sleep(std::time::Duration::from_millis(80));
-                Ok(())
-            };
-            program_static()?;
+            }
         } else {
             click(18_333_024)?;
             click(palette_id)?;
         }
     }
-    std::thread::sleep(std::time::Duration::from_millis(120));
+    std::thread::sleep(std::time::Duration::from_millis(40));
     click(18_309_376)?;
-    if effect == "static" {
-        // Lexar's two-DIMM firmware latches the edited palette on the first
-        // Apply and commits it to the second module on the next Apply. Send
-        // that confirmation inside the same configured session instead of
-        // rebuilding all eight LED slots in a second, multi-second pass.
-        std::thread::sleep(std::time::Duration::from_millis(90));
-        click(18_309_376)?;
-    }
-    std::thread::sleep(std::time::Duration::from_millis(450));
+    std::thread::sleep(std::time::Duration::from_millis(150));
     unsafe { let _ = ShowWindow(window, SW_HIDE); }
     let expected = if effect == "off" { "led_sw=0" } else { "led_sw=1" };
     let committed = std::fs::read_to_string(&config).unwrap_or_default();
@@ -603,6 +612,12 @@ mod rgb_tests {
     fn lexar_bridge_applies_breathing() {
         super::lexar_ram_apply("breathing", "00FF00").expect("Lexar effect failed");
     }
+    #[test]
+    #[ignore = "changes the physical Lexar DIMM lighting"]
+    fn lexar_bridge_applies_static_once() {
+        super::lexar_ram_apply_confirmed("static", "00FFFF")
+            .expect("Lexar static effect failed");
+    }
 
     #[test]
     #[ignore = "changes the physical Zotac GPU lighting"]
@@ -623,5 +638,11 @@ mod rgb_tests {
         assert!(super::ram_effect_matches(sample, "breathing", "00FF00"));
         assert!(!super::ram_effect_matches(sample, "static", "00FF00"));
         assert!(!super::ram_effect_matches(sample, "breathing", "FF0000"));
+    }
+
+    #[test]
+    fn reads_the_last_lexar_led_sync_state() {
+        assert!(super::lexar_led_sync_enabled("Synchronize=0\nSynchronize=1\n"));
+        assert!(!super::lexar_led_sync_enabled("Synchronize=1\nSynchronize=0\n"));
     }
 }
