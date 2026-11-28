@@ -303,14 +303,14 @@ pub fn apply_lighting(action: &str) -> Result<String, String> {
     }
     stop_lconnect()?;
     match target {
-        "ram" => lexar_ram_apply(effect, color)?,
+        "ram" => lexar_ram_apply_confirmed(effect, color)?,
         "gpu" => gpu_apply(effect, color)?,
         "all" => {
             // Always address both controllers. A delayed Lexar confirmation
             // must not prevent the independent Zotac/OpenRGB command.
             // Keep SMBus writers serialized. The persistent OpenRGB server
             // makes the GPU phase quick without racing Lexar for the bus.
-            let ram = lexar_ram_apply(effect, color);
+            let ram = lexar_ram_apply_confirmed(effect, color);
             let gpu = gpu_apply(effect, color);
             match (ram, gpu) {
                 (Ok(()), Ok(())) => (),
@@ -327,6 +327,18 @@ pub fn apply_lighting(action: &str) -> Result<String, String> {
 
 fn lexar_ram_off() -> Result<(), String> {
     lexar_ram_apply("off", "FF0000")
+}
+
+fn lexar_ram_apply_confirmed(effect: &str, color: &str) -> Result<(), String> {
+    lexar_ram_apply(effect, color)?;
+    if effect == "static" {
+        // On this two-DIMM bridge, a complete second mode transaction is what
+        // advances the synchronized write to the other module. Doing it here
+        // replaces the second Apply click the user previously had to make.
+        std::thread::sleep(std::time::Duration::from_millis(120));
+        lexar_ram_apply(effect, color)?;
+    }
+    Ok(())
 }
 
 fn ram_effect_matches(config: &str, effect: &str, color: &str) -> bool {
@@ -413,6 +425,12 @@ fn lexar_ram_apply(effect: &str, color: &str) -> Result<(), String> {
             click(18_310_624)?;
             std::thread::sleep(std::time::Duration::from_millis(250));
         }
+        // Always return to the profile's SYNC page before changing an
+        // effect. Otherwise Lexar can leave one DIMM selected internally:
+        // the first Apply updates only EffectInfo0 and a second user click is
+        // needed before the color reaches EffectInfo1.
+        click(18_320_448)?;
+        std::thread::sleep(std::time::Duration::from_millis(60));
         click(match effect {
             "breathing" => 18_324_272,
             "rainbow" => 18_326_144,
@@ -443,11 +461,6 @@ fn lexar_ram_apply(effect: &str, color: &str) -> Result<(), String> {
                 std::thread::sleep(std::time::Duration::from_millis(80));
                 Ok(())
             };
-            // Lexar commits the mode on the first Apply and the synchronized
-            // color on the next one. Perform both phases for one Kanali click.
-            program_static()?;
-            click(18_309_376)?;
-            std::thread::sleep(std::time::Duration::from_millis(220));
             program_static()?;
         } else {
             click(18_333_024)?;
@@ -595,8 +608,8 @@ mod rgb_tests {
     #[test]
     #[ignore = "changes both physical lighting controllers"]
     fn synchronized_command_applies_to_ram_and_gpu() {
-        super::lexar_ram_apply("static", "FFFF00").expect("RAM sync effect failed");
-        super::gpu_apply("static", "FFFF00").expect("GPU sync effect failed");
+        super::lexar_ram_apply_confirmed("static", "00FFFF").expect("RAM sync effect failed");
+        super::gpu_apply("static", "00FFFF").expect("GPU sync effect failed");
     }
 
     #[test]
