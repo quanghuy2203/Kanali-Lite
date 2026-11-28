@@ -435,7 +435,7 @@ fn lexar_ram_apply(effect: &str, color: &str) -> Result<(), String> {
         // the first Apply updates only EffectInfo0 and a second user click is
         // needed before the color reaches EffectInfo1.
         click(18_320_448)?;
-        std::thread::sleep(std::time::Duration::from_millis(60));
+            std::thread::sleep(std::time::Duration::from_millis(35));
         click(match effect {
             "breathing" => 18_324_272,
             "rainbow" => 18_326_144,
@@ -457,13 +457,17 @@ fn lexar_ram_apply(effect: &str, color: &str) -> Result<(), String> {
                 for led in [1, 2, 3, 4, 5, 6, 7, 0] {
                     click(18_333_024 + led * 512)?;
                     click(palette_id)?;
-                    std::thread::sleep(std::time::Duration::from_millis(45));
+                    // BM_CLICK is synchronous: when it returns, Lexar has
+                    // handled the selected LED and palette. A short yield is
+                    // enough for its repaint queue; the old 45 ms delay was
+                    // paid sixteen times across the confirmed two-pass write.
+                    std::thread::sleep(std::time::Duration::from_millis(12));
                 }
                 click(18_339_680)?;
-                std::thread::sleep(std::time::Duration::from_millis(100));
+                std::thread::sleep(std::time::Duration::from_millis(45));
                 click(18_333_024)?;
                 click(palette_id)?;
-                std::thread::sleep(std::time::Duration::from_millis(80));
+                std::thread::sleep(std::time::Duration::from_millis(35));
                 Ok(())
             };
             program_static()?;
@@ -472,9 +476,11 @@ fn lexar_ram_apply(effect: &str, color: &str) -> Result<(), String> {
             click(palette_id)?;
         }
     }
-    std::thread::sleep(std::time::Duration::from_millis(120));
+    std::thread::sleep(std::time::Duration::from_millis(70));
     click(18_309_376)?;
-    std::thread::sleep(std::time::Duration::from_millis(450));
+    // SendMessageW waits for the vendor Apply handler itself. Keep only a
+    // small guard for its asynchronous config flush before verification.
+    std::thread::sleep(std::time::Duration::from_millis(220));
     unsafe { let _ = ShowWindow(window, SW_HIDE); }
     let expected = if effect == "off" { "led_sw=0" } else { "led_sw=1" };
     let committed = std::fs::read_to_string(&config).unwrap_or_default();
