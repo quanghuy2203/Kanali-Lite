@@ -137,13 +137,14 @@ impl Ene {
             (0x8000, 0x8010, count)
         })
     }
-    fn apply(&self, addr: u8, effect: &str, rgb: [u8; 3]) -> Result<(), String> {
-        if !self.verified(addr) {
-            return Err(format!(
-                "0x{addr:02X} không phải controller ENE đã xác minh"
-            ));
-        }
-        let (direct, effect_reg, count) = self.layout(addr)?;
+    fn prepare(
+        &self,
+        addr: u8,
+        layout: (u16, u16, usize),
+        effect: &str,
+        rgb: [u8; 3],
+    ) -> Result<(), String> {
+        let (direct, effect_reg, count) = layout;
         let wire: Vec<u8> = (0..count).flat_map(|_| [rgb[0], rgb[2], rgb[1]]).collect();
         match effect {
             "static" => {
@@ -153,7 +154,6 @@ impl Ene {
                 self.write_reg(addr, 0x80A0, 1)?;
                 self.block(addr, direct, &wire)?;
                 self.write_reg(addr, 0x8020, 1)?;
-                self.write_reg(addr, 0x80A0, 1)?;
             }
             mode => {
                 self.write_reg(addr, 0x8020, 0)?;
@@ -171,13 +171,13 @@ impl Ene {
                 self.write_reg(addr, 0x8021, id)?;
                 self.write_reg(addr, 0x8022, 2)?;
                 self.write_reg(addr, 0x8023, 0)?;
-                self.write_reg(addr, 0x80A0, 1)?;
             }
         }
-        let mode = self.read_reg(addr, 0x8021).unwrap_or(0xFF);
-        let direct_state = self.read_reg(addr, 0x8020).unwrap_or(0xFF);
-        println!("addr=0x{addr:02X} after mode=0x{mode:02X} direct=0x{direct_state:02X}");
         Ok(())
+    }
+
+    fn commit(&self, addr: u8) -> Result<(), String> {
+        self.write_reg(addr, 0x80A0, 1)
     }
 }
 
@@ -198,8 +198,23 @@ fn run() -> Result<(), String> {
     let color = u32::from_str_radix(&args[2], 16).map_err(|_| "Màu không hợp lệ")?;
     let rgb = [(color >> 16) as u8, (color >> 8) as u8, color as u8];
     let ene = unsafe { Ene::load(Path::new(&args[3]))? };
-    for addr in [0x71, 0x73] {
-        ene.apply(addr, &args[1], rgb)?;
+    let addresses = [0x71, 0x73];
+    // Complete slow probing before changing visible state. Stage both DIMMs,
+    // then issue their final APPLY writes back-to-back.
+    let mut layouts = Vec::with_capacity(addresses.len());
+    for addr in addresses {
+        if !ene.verified(addr) {
+            return Err(format!(
+                "0x{addr:02X} không phải controller ENE đã xác minh"
+            ));
+        }
+        layouts.push(ene.layout(addr)?);
+    }
+    for (addr, layout) in addresses.into_iter().zip(layouts) {
+        ene.prepare(addr, layout, &args[1], rgb)?;
+    }
+    for addr in addresses {
+        ene.commit(addr)?;
     }
     Ok(())
 }
