@@ -115,7 +115,7 @@ fn make_poster_at(source: &Path, name: &str, start: f64) -> Result<(), String> {
     let video_target = target.with_extension("preview.mp4");
     let video_tmp = tempfile::Builder::new().suffix(".mp4").tempfile_in(&dir)
         .map_err(|e| e.to_string())?.into_temp_path();
-    run(ffmpeg().arg("-i").arg(source).args(["-vf", "fps=60,scale=480:232:force_original_aspect_ratio=decrease,pad=480:232:(ow-iw)/2:(oh-ih)/2", "-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-movflags", "+faststart"]).arg(&*video_tmp))?;
+    run(ffmpeg().arg("-i").arg(source).args(["-vf", "fps=60,scale=480:232:force_original_aspect_ratio=increase,crop=480:232,setsar=1", "-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-movflags", "+faststart"]).arg(&*video_tmp))?;
     let _ = fs::remove_file(&video_target);
     video_tmp.persist(&video_target).map_err(|e| e.to_string())?;
 
@@ -270,7 +270,10 @@ const ENCODE: &[&str] = &[
     "-x264-params", "repeat-headers=1:annexb=1:aud=1:b-pyramid=0:weightp=0:ref=3:range=pc:colorprim=bt709:transfer=bt709:colormatrix=bt709:bframes=0",
     "-color_range", "pc", "-crf", "23", "-maxrate", "12M", "-bufsize", "24M", "-g", "30", "-f", "h264",
 ];
-const SCALE: &str="fps=60,scale=2240:1080:force_original_aspect_ratio=decrease:out_range=full:out_color_matrix=bt709,pad=2240:1080:(ow-iw)/2:(oh-ih)/2,setsar=1";
+// PANORAMA is an ultra-wide 56:27 panel. Use cover semantics for every
+// imported aspect ratio: scale until the panel is filled, then crop the
+// overflow symmetrically. This avoids both letterboxing and stretched faces.
+const SCALE: &str="fps=60,scale=2240:1080:force_original_aspect_ratio=increase:out_range=full:out_color_matrix=bt709,crop=2240:1080,setsar=1";
 
 fn contains_picture(samples: &[u8]) -> bool {
     samples
@@ -621,6 +624,12 @@ mod capture_tests {
         assert!(name.is_ascii());
         assert!(name.len() < 64, "{name}");
         assert!(name.ends_with(".mp4.h264_2240x1080"));
+    }
+    #[test]
+    fn panorama_conversion_fills_the_panel_without_letterboxing() {
+        assert!(SCALE.contains("force_original_aspect_ratio=increase"));
+        assert!(SCALE.contains("crop=2240:1080"));
+        assert!(!SCALE.contains("pad="));
     }
     #[test]
     #[ignore = "requires an installed original KANALI encoder"]
