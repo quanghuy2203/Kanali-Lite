@@ -425,11 +425,10 @@ fn lexar_ram_apply(effect: &str, color: &str) -> Result<(), String> {
         if !is_off { click(18_310_624)?; }
     } else {
         if is_off {
-            // The Lexar bridge ignores palette changes while LED power is off.
-            // Turn it on and program immediately; the old 250 ms pause made
-            // the previously saved color needlessly visible to the user.
+            // Lexar needs this settling period after LED power-on. Shortening
+            // it caused the vendor bridge to discard the following effect.
             click(18_310_624)?;
-            std::thread::sleep(std::time::Duration::from_millis(100));
+            std::thread::sleep(std::time::Duration::from_millis(250));
         }
         // Always return to the profile's SYNC page before changing an
         // effect. Otherwise Lexar can leave one DIMM selected internally:
