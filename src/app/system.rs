@@ -349,7 +349,10 @@ fn ram_effect_matches(config: &str, effect: &str, color: &str) -> bool {
     if !value.starts_with(mode) { return false; }
     if effect == "rainbow" { return true; }
     if value.len() < 40 || color.len() != 6 { return false; }
-    let expected = format!("{}{}{}00", &color[4..6], &color[2..4], &color[0..2]);
+    // Lexar persists palette colors as RRGGBB00. Treating this as BGR made a
+    // successful write look like a failure, so Kanali unnecessarily repeated
+    // the complete (slow) SMBus transaction.
+    let expected = format!("{}00", color.to_ascii_uppercase());
     value[32..40].eq_ignore_ascii_case(&expected)
 }
 
@@ -422,8 +425,11 @@ fn lexar_ram_apply(effect: &str, color: &str) -> Result<(), String> {
         if !is_off { click(18_310_624)?; }
     } else {
         if is_off {
+            // The Lexar bridge ignores palette changes while LED power is off.
+            // Turn it on and program immediately; the old 250 ms pause made
+            // the previously saved color needlessly visible to the user.
             click(18_310_624)?;
-            std::thread::sleep(std::time::Duration::from_millis(250));
+            std::thread::sleep(std::time::Duration::from_millis(100));
         }
         // Always return to the profile's SYNC page before changing an
         // effect. Otherwise Lexar can leave one DIMM selected internally:
@@ -471,8 +477,8 @@ fn lexar_ram_apply(effect: &str, color: &str) -> Result<(), String> {
     click(18_309_376)?;
     std::thread::sleep(std::time::Duration::from_millis(450));
     unsafe { let _ = ShowWindow(window, SW_HIDE); }
-    let committed = std::fs::read_to_string(&config).unwrap_or_default();
     let expected = if effect == "off" { "led_sw=0" } else { "led_sw=1" };
+    let committed = std::fs::read_to_string(&config).unwrap_or_default();
     if committed.lines().any(|line| line == expected)
         && (effect == "off" || ram_effect_matches(&committed, effect, color)) { Ok(()) }
     else { Err("Bridge Lexar không xác nhận đúng màu/hiệu ứng đã chọn".into()) }
