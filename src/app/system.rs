@@ -330,15 +330,7 @@ fn lexar_ram_off() -> Result<(), String> {
 }
 
 fn lexar_ram_apply_confirmed(effect: &str, color: &str) -> Result<(), String> {
-    lexar_ram_apply(effect, color)?;
-    if effect == "static" {
-        // On this two-DIMM bridge, a complete second mode transaction is what
-        // advances the synchronized write to the other module. Doing it here
-        // replaces the second Apply click the user previously had to make.
-        std::thread::sleep(std::time::Duration::from_millis(120));
-        lexar_ram_apply(effect, color)?;
-    }
-    Ok(())
+    lexar_ram_apply(effect, color)
 }
 
 fn ram_effect_matches(config: &str, effect: &str, color: &str) -> bool {
@@ -474,6 +466,14 @@ fn lexar_ram_apply(effect: &str, color: &str) -> Result<(), String> {
     }
     std::thread::sleep(std::time::Duration::from_millis(120));
     click(18_309_376)?;
+    if effect == "static" {
+        // Lexar's two-DIMM firmware latches the edited palette on the first
+        // Apply and commits it to the second module on the next Apply. Send
+        // that confirmation inside the same configured session instead of
+        // rebuilding all eight LED slots in a second, multi-second pass.
+        std::thread::sleep(std::time::Duration::from_millis(90));
+        click(18_309_376)?;
+    }
     std::thread::sleep(std::time::Duration::from_millis(450));
     unsafe { let _ = ShowWindow(window, SW_HIDE); }
     let expected = if effect == "off" { "led_sw=0" } else { "led_sw=1" };
