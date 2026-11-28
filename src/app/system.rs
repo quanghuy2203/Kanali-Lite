@@ -330,10 +330,15 @@ fn lexar_ram_off() -> Result<(), String> {
 }
 
 fn lexar_ram_apply_confirmed(effect: &str, color: &str) -> Result<(), String> {
-    // lexar_ram_apply keeps the vendor window and the selected LED data alive
-    // for the confirmation click.  Do not repeat the complete eight-LED setup:
-    // doing so made a static colour take 5-8 seconds to reach the DIMMs.
-    lexar_ram_apply(effect, color)
+    lexar_ram_apply(effect, color)?;
+    if effect == "static" {
+        // The vendor bridge only commits the second DIMM after a complete
+        // second transaction on this kit. Two Apply clicks in one session do
+        // not work (verified on v0.2.49), so keep the hardware-confirmed path.
+        std::thread::sleep(std::time::Duration::from_millis(120));
+        lexar_ram_apply(effect, color)?;
+    }
+    Ok(())
 }
 
 fn ram_effect_matches(config: &str, effect: &str, color: &str) -> bool {
@@ -467,15 +472,8 @@ fn lexar_ram_apply(effect: &str, color: &str) -> Result<(), String> {
             click(palette_id)?;
         }
     }
-    std::thread::sleep(std::time::Duration::from_millis(80));
+    std::thread::sleep(std::time::Duration::from_millis(120));
     click(18_309_376)?;
-    if effect == "static" {
-        // This kit needs two Apply notifications for a static colour to reach
-        // both DIMMs.  The LED data is already complete, so confirm it again
-        // in the same session instead of rebuilding all eight LED slots.
-        std::thread::sleep(std::time::Duration::from_millis(120));
-        click(18_309_376)?;
-    }
     std::thread::sleep(std::time::Duration::from_millis(450));
     unsafe { let _ = ShowWindow(window, SW_HIDE); }
     let expected = if effect == "off" { "led_sw=0" } else { "led_sw=1" };
