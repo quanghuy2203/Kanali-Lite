@@ -1,6 +1,6 @@
 [package]
 name = "kanali-rs"
-version = "0.2.51"
+version = "0.2.52"
 default-run = "kanali"
 edition = "2021"
 description = "Điều khiển màn hình Tryx Panorama: nhẹ RAM, có giao diện và tự cập nhật"

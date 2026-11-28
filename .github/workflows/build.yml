@@ -19,6 +19,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - name: Build embedded ENE RAM helper
+        shell: pwsh
+        run: |
+          rustup target add i686-pc-windows-msvc
+          cargo build --release --target i686-pc-windows-msvc --manifest-path ene-helper/Cargo.toml
+          "KANALI_ENE_HELPER=$pwd/ene-helper/target/i686-pc-windows-msvc/release/kanali-ene-helper.exe" >> $env:GITHUB_ENV
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --locked --lib --bin kanali
       - run: cargo test --locked --bin kanali windows_capture_tool_encodes_visible_device_clip -- --ignored

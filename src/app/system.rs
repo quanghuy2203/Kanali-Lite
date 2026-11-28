@@ -303,14 +303,14 @@ pub fn apply_lighting(action: &str) -> Result<String, String> {
     }
     stop_lconnect()?;
     match target {
-        "ram" => lexar_ram_apply_confirmed(effect, color)?,
+        "ram" => ram_apply(effect, color)?,
         "gpu" => gpu_apply(effect, color)?,
         "all" => {
             // Always address both controllers. A delayed Lexar confirmation
             // must not prevent the independent Zotac/OpenRGB command.
             // Keep SMBus writers serialized. The persistent OpenRGB server
             // makes the GPU phase quick without racing Lexar for the bus.
-            let ram = lexar_ram_apply_confirmed(effect, color);
+            let ram = ram_apply(effect, color);
             let gpu = gpu_apply(effect, color);
             match (ram, gpu) {
                 (Ok(()), Ok(())) => (),
@@ -326,7 +326,46 @@ pub fn apply_lighting(action: &str) -> Result<String, String> {
 }
 
 fn lexar_ram_off() -> Result<(), String> {
-    lexar_ram_apply("off", "FF0000")
+    ram_apply("off", "FF0000")
+}
+
+const ENE_HELPER: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/kanali-ene-helper.exe"));
+
+fn ram_apply(effect: &str, color: &str) -> Result<(), String> {
+    // The embedded 32-bit helper talks to the signed ENE SMBus driver used by
+    // these DIMMs. Keep the known-good Lexar UI bridge as an automatic fallback
+    // for development builds or if hardware verification ever fails.
+    match ene_ram_apply(effect, color) {
+        Ok(()) => Ok(()),
+        Err(direct) => lexar_ram_apply_confirmed(effect, color)
+            .map_err(|legacy| format!("ENE trực tiếp: {direct}; Lexar fallback: {legacy}")),
+    }
+}
+
+fn ene_ram_apply(effect: &str, color: &str) -> Result<(), String> {
+    use std::io::Write;
+    if ENE_HELPER.is_empty() { return Err("bản build không chứa ENE helper".into()); }
+    let dll = std::path::Path::new(r"C:\Program Files\ENE\Aac_ENE_DRAM_RGB_AIO\x86\MsIo32_ENE.dll");
+    if !dll.is_file() { return Err("không tìm thấy driver ENE chính hãng".into()); }
+    let tools = kanali_rs::config::data_dir().join("tools");
+    std::fs::create_dir_all(&tools).map_err(|e| e.to_string())?;
+    let helper = tools.join("kanali-ene-helper.exe");
+    let needs_write = std::fs::read(&helper).map(|v| v != ENE_HELPER).unwrap_or(true);
+    if needs_write {
+        let mut tmp = tempfile::NamedTempFile::new_in(&tools).map_err(|e| e.to_string())?;
+        tmp.write_all(ENE_HELPER).map_err(|e| e.to_string())?;
+        let _ = std::fs::remove_file(&helper);
+        tmp.persist(&helper).map_err(|e| e.to_string())?;
+    }
+    // Never let the vendor GUI and the direct helper write the same bus at the
+    // same time. The helper initializes and shuts down the driver per command.
+    let _ = Command::new("taskkill.exe").args(["/IM", "Gaming.exe", "/F"])
+        .creation_flags(HIDDEN).output();
+    let output = Command::new(&helper).arg(effect).arg(color).arg(dll)
+        .creation_flags(HIDDEN).output().map_err(|e| e.to_string())?;
+    if output.status.success() { Ok(()) } else {
+        Err(String::from_utf8_lossy(&output.stderr).trim().to_string().if_empty("ENE helper không xác nhận lệnh"))
+    }
 }
 
 fn lexar_ram_apply_confirmed(effect: &str, color: &str) -> Result<(), String> {

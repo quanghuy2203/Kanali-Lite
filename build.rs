@@ -1,4 +1,11 @@
 fn main() {
+    println!("cargo:rerun-if-env-changed=KANALI_ENE_HELPER");
+    let out = std::path::PathBuf::from(std::env::var_os("OUT_DIR").unwrap()).join("kanali-ene-helper.exe");
+    if let Some(source) = std::env::var_os("KANALI_ENE_HELPER") {
+        std::fs::copy(source, &out).expect("copy ENE helper");
+    } else {
+        std::fs::write(&out, []).expect("create empty ENE helper placeholder");
+    }
     #[cfg(windows)]
     {
         let mut resource = winresource::WindowsResource::new();
